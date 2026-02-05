@@ -5,6 +5,7 @@ import { SelectionProvider } from "./_components/selection";
 import { MasterCheckbox, RowCheckbox } from "./_components/checks";
 import BulkTray from "./_components/BulkTray";
 import AddCategoryButton from "./_components/AddCategoryButton";
+import ProductsFilters from "./_components/ProductsFilters";
 
 /* ---------- Types ---------- */
 type Product = {
@@ -295,72 +296,25 @@ export default async function ProductsPage({ searchParams }: { searchParams: Pag
         </div>
 
         {/* Filters */}
-        <div className="card" style={{ padding: 12 }}>
-          <form action="/products" className="flex flex-wrap items-end gap-2">
-            <div className="flex flex-col">
-              <label className="text-xs">Search</label>
-              <input
-                name="q"
-                defaultValue={q}
-                placeholder="Search by name or category…"
-                className="border rounded-lg px-3 py-2"
-              />
-            </div>
-
-            <div className="flex flex-col">
-              <label className="text-xs">Category</label>
-              <select name="category" defaultValue={category || ""} className="border rounded-lg px-3 py-2">
-                <option value="">All</option>
-                {categories.map((c) => (
-                  <option key={c} value={c}>{c}</option>
-                ))}
-              </select>
-            </div>
-
-            <div className="flex flex-col">
-              <label className="text-xs">Sort</label>
-              <select name="sort" defaultValue={sort} className="border rounded-lg px-3 py-2">
-                <option value="id">Newest</option>
-                <option value="name">Name</option>
-                <option value="category">Category</option>
-                <option value="price">Price</option>
-                <option value="stock">Stock</option>
-                <option value="expiry">Near Expiry</option>
-                <option value="least_bought">Least Bought</option>
-              </select>
-            </div>
-
-            <div className="flex flex-col">
-              <label className="text-xs">Direction</label>
-              <select name="dir" defaultValue={dir} className="border rounded-lg px-3 py-2">
-                <option value="asc">A → Z / Low → High</option>
-                <option value="desc">Z → A / High → Low</option>
-              </select>
-            </div>
-
-            <div className="flex items-center gap-2">
-              <input type="hidden" name="perPage" value={perPage} />
-              {lowOnly && <input type="hidden" name="low" value="1" />}
-              <button className="px-3 py-2 rounded-xl border" type="submit">
-                Apply
-              </button>
-              <Link className="glass-btn px-3 py-2 rounded-2xl" href="/products">
-                Clear Filters
-              </Link>
-            </div>
-
-            <div className="ml-auto flex items-center gap-2">
-              <Link
-                className={`px-3 py-2 rounded-xl border ${lowOnly ? "bg-yellow-100 border-yellow-300" : ""}`}
-                href={lowToggleHref}
-              >
-                {lowOnly ? "Showing Low-stock" : "Low-stock only"}
-              </Link>
-              <div className="hidden sm:block">
-                <PerPagePicker qs={baseQS} value={perPage} />
-              </div>
-            </div>
-          </form>
+        <ProductsFilters
+          q={q}
+          category={category}
+          sort={sort}
+          dir={dir}
+          perPage={perPage}
+          lowOnly={lowOnly}
+          categories={categories}
+        />
+        <div className="flex items-center gap-2 justify-end">
+          <Link
+            className={`px-3 py-2 rounded-xl border ${lowOnly ? "bg-yellow-100 border-yellow-300" : ""}`}
+            href={lowToggleHref}
+          >
+            {lowOnly ? "Showing Low-stock" : "Low-stock only"}
+          </Link>
+          <div className="hidden sm:block">
+            <PerPagePicker qs={baseQS} value={perPage} />
+          </div>
         </div>
 
         {/* Error */}
@@ -379,21 +333,21 @@ export default async function ProductsPage({ searchParams }: { searchParams: Pag
         {/* Table */}
         {!errorMsg && (
           <div className="table-wrap">
-            <table className="table">
+            <table className="table" style={{ minWidth: 1400 }}>
               <thead>
                 <tr>
                   <th className="px-3 py-2 w-10">
                     <MasterCheckbox pageIds={items.map((i) => i.id)} />
                   </th>
-                  <SortableTh label="ID" active={sort === "id"} dir={dir} href={sortHref("id")} />
-                  <SortableTh label="Name" active={sort === "name"} dir={dir} href={sortHref("name")} />
-                  <SortableTh label="SKU" active={sort === "sku"} dir={dir} href={sortHref("sku")} />
+                  <th className="px-3 py-2 text-left">ID</th>
+                  <th className="px-3 py-2 text-left">Name</th>
+                  <th className="px-3 py-2 text-left">SKU</th>
                   <th className="px-3 py-2 text-left">Category</th>
                   <th className="px-3 py-2 text-left">HSN</th>
                   <th className="px-3 py-2 text-left">Lot</th>
                   <th className="px-3 py-2 text-left">Expiry</th>
-                  <SortableTh label="Price" active={sort === "price"} dir={dir} href={sortHref("price")} />
-                  <SortableTh label="Stock" active={sort === "stock"} dir={dir} href={sortHref("stock")} />
+                  <th className="px-3 py-2 text-left">Price</th>
+                  <th className="px-3 py-2 text-left">Stock</th>
                   <th className="px-3 py-2 text-left">Low Stock</th>
                   <th className="px-3 py-2 text-left">Last Edited</th>
                   <th className="px-3 py-2 text-right">Actions</th>
