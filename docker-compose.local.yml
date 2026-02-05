@@ -1,6 +1,6 @@
 services:
   web:
     build:
-      context: /Users/nadiya/AxEin/app
-      dockerfile: /Users/nadiya/AxEin/app/Dockerfile
+      context: ./app
+      dockerfile: ./app/Dockerfile
     image: axein-web:local
