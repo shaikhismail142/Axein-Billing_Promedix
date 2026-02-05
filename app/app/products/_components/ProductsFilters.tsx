@@ -1,7 +1,7 @@
 "use client";
 
-import { useRouter, useSearchParams } from "next/navigation";
-import { useMemo } from "react";
+import { useRouter } from "next/navigation";
+import { useEffect, useState } from "react";
 
 type Props = {
   q: string;
@@ -23,16 +23,33 @@ export default function ProductsFilters({
   categories,
 }: Props) {
   const router = useRouter();
-  const sp = useSearchParams();
+  const [qVal, setQVal] = useState(q);
+  const [catVal, setCatVal] = useState(category);
+  const [sortVal, setSortVal] = useState(sort);
+  const [dirVal, setDirVal] = useState(dir);
 
-  const base = useMemo(() => new URLSearchParams(sp.toString()), [sp]);
+  useEffect(() => {
+    setQVal(q);
+    setCatVal(category);
+    setSortVal(sort);
+    setDirVal(dir);
+  }, [q, category, sort, dir]);
 
-  const apply = (patch: Record<string, string | null | undefined>) => {
-    const qs = new URLSearchParams(base.toString());
-    Object.entries(patch).forEach(([k, v]) => {
-      if (v === null || v === undefined || v === "") qs.delete(k);
-      else qs.set(k, v);
-    });
+  const apply = (next?: Partial<{ q: string; category: string; sort: string; dir: string }>) => {
+    const merged = {
+      q: qVal,
+      category: catVal,
+      sort: sortVal,
+      dir: dirVal,
+      ...(next || {}),
+    };
+    const qs = new URLSearchParams();
+    if (merged.q) qs.set("q", merged.q);
+    if (merged.category) qs.set("category", merged.category);
+    if (merged.sort) qs.set("sort", merged.sort);
+    if (merged.dir) qs.set("dir", merged.dir);
+    if (perPage) qs.set("perPage", String(perPage));
+    if (lowOnly) qs.set("low", "1");
     qs.set("page", "1");
     router.push(`/products?${qs.toString()}`);
   };
@@ -44,7 +61,8 @@ export default function ProductsFilters({
           <label className="text-xs">Search</label>
           <input
             name="q"
-            defaultValue={q}
+            value={qVal}
+            onChange={(e) => setQVal(e.target.value)}
             placeholder="Search by name or category…"
             className="border rounded-lg px-3 py-2"
           />
@@ -54,9 +72,13 @@ export default function ProductsFilters({
           <label className="text-xs">Category</label>
           <select
             name="category"
-            defaultValue={category || ""}
+            value={catVal || ""}
             className="border rounded-lg px-3 py-2"
-            onChange={(e) => apply({ category: e.target.value })}
+            onChange={(e) => {
+              const v = e.target.value;
+              setCatVal(v);
+              apply({ category: v });
+            }}
           >
             <option value="">All</option>
             {categories.map((c) => (
@@ -69,9 +91,13 @@ export default function ProductsFilters({
           <label className="text-xs">Sort</label>
           <select
             name="sort"
-            defaultValue={sort}
+            value={sortVal}
             className="border rounded-lg px-3 py-2"
-            onChange={(e) => apply({ sort: e.target.value })}
+            onChange={(e) => {
+              const v = e.target.value;
+              setSortVal(v);
+              apply({ sort: v });
+            }}
           >
             <option value="id">Newest</option>
             <option value="name">Name</option>
@@ -87,9 +113,13 @@ export default function ProductsFilters({
           <label className="text-xs">Direction</label>
           <select
             name="dir"
-            defaultValue={dir}
+            value={dirVal}
             className="border rounded-lg px-3 py-2"
-            onChange={(e) => apply({ dir: e.target.value })}
+            onChange={(e) => {
+              const v = e.target.value;
+              setDirVal(v);
+              apply({ dir: v });
+            }}
           >
             <option value="asc">A → Z / Low → High</option>
             <option value="desc">Z → A / High → Low</option>
@@ -99,7 +129,11 @@ export default function ProductsFilters({
         <div className="flex items-center gap-2">
           <input type="hidden" name="perPage" value={perPage} />
           {lowOnly && <input type="hidden" name="low" value="1" />}
-          <button className="px-3 py-2 rounded-xl border" type="submit">
+          <button
+            className="px-3 py-2 rounded-xl border"
+            type="button"
+            onClick={() => apply({ q: qVal })}
+          >
             Search
           </button>
           <a className="glass-btn px-3 py-2 rounded-2xl" href="/products">

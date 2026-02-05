@@ -273,7 +273,7 @@ export default async function ProductsPage({ searchParams }: { searchParams: Pag
   const exportAllHref = `/api/products/export${exportParams.size ? `?${exportParams.toString()}` : ""}`;
 
   return (
-    <div className="p-6 space-y-4 max-w-6xl mx-auto">
+    <div className="p-6 space-y-4 max-w-[1600px] mx-auto">
       <SelectionProvider>
         {/* Title + actions */}
         <div className="flex items-center justify-between gap-3">
@@ -333,7 +333,7 @@ export default async function ProductsPage({ searchParams }: { searchParams: Pag
         {/* Table */}
         {!errorMsg && (
           <div className="table-wrap">
-            <table className="table" style={{ minWidth: 1400 }}>
+            <table className="table" style={{ minWidth: 1500 }}>
               <thead>
                 <tr>
                   <th className="px-3 py-2 w-10">
@@ -350,7 +350,9 @@ export default async function ProductsPage({ searchParams }: { searchParams: Pag
                   <th className="px-3 py-2 text-left">Stock</th>
                   <th className="px-3 py-2 text-left">Low Stock</th>
                   <th className="px-3 py-2 text-left">Last Edited</th>
-                  <th className="px-3 py-2 text-right">Actions</th>
+                  <th className="px-3 py-2 text-right" style={{ position: "sticky", right: 0, background: "var(--surface-1)", zIndex: 1 }}>
+                    Actions
+                  </th>
                 </tr>
               </thead>
               <tbody>
@@ -407,7 +409,7 @@ export default async function ProductsPage({ searchParams }: { searchParams: Pag
                         {p.low_stock_threshold}
                       </td>
                       <td className="px-3 py-2">{fmtUpdated(p.updated_at)}</td>
-                      <td className="px-3 py-2 text-right">
+                      <td className="px-3 py-2 text-right" style={{ position: "sticky", right: 0, background: "var(--surface-1)" }}>
                         <form id={formId} method="post" action={`/api/products/${p.id}`} className="inline-flex items-center gap-2">
                           <input type="hidden" name="_method" value="PATCH" />
                           <input type="hidden" name="return_to" value="/products" />
