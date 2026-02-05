@@ -1,7 +1,7 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 type Props = {
   q: string;
@@ -35,28 +35,41 @@ export default function ProductsFilters({
     setDirVal(dir);
   }, [q, category, sort, dir]);
 
-  const apply = (next?: Partial<{ q: string; category: string; sort: string; dir: string }>) => {
-    const merged = {
-      q: qVal,
-      category: catVal,
-      sort: sortVal,
-      dir: dirVal,
-      ...(next || {}),
+  const buildUrl = useMemo(() => {
+    return (next?: Partial<{ q: string; category: string; sort: string; dir: string }>) => {
+      const merged = {
+        q: qVal,
+        category: catVal,
+        sort: sortVal,
+        dir: dirVal,
+        ...(next || {}),
+      };
+      const qs = new URLSearchParams();
+      const qClean = merged.q?.trim() || "";
+      if (qClean) qs.set("q", qClean);
+      if (merged.category) qs.set("category", merged.category);
+      if (merged.sort) qs.set("sort", merged.sort);
+      if (merged.dir) qs.set("dir", merged.dir);
+      if (perPage) qs.set("perPage", String(perPage));
+      if (lowOnly) qs.set("low", "1");
+      qs.set("page", "1");
+      return `/products?${qs.toString()}`;
     };
-    const qs = new URLSearchParams();
-    if (merged.q) qs.set("q", merged.q);
-    if (merged.category) qs.set("category", merged.category);
-    if (merged.sort) qs.set("sort", merged.sort);
-    if (merged.dir) qs.set("dir", merged.dir);
-    if (perPage) qs.set("perPage", String(perPage));
-    if (lowOnly) qs.set("low", "1");
-    qs.set("page", "1");
-    router.push(`/products?${qs.toString()}`);
+  }, [qVal, catVal, sortVal, dirVal, perPage, lowOnly]);
+
+  const apply = (next?: Partial<{ q: string; category: string; sort: string; dir: string }>) => {
+    router.push(buildUrl(next));
   };
 
   return (
     <div className="card" style={{ padding: 12 }}>
-      <form action="/products" className="flex flex-wrap items-end gap-2">
+      <form
+        className="flex flex-wrap items-end gap-2"
+        onSubmit={(e) => {
+          e.preventDefault();
+          apply({ q: qVal });
+        }}
+      >
         <div className="flex flex-col">
           <label className="text-xs">Search</label>
           <input
@@ -129,11 +142,7 @@ export default function ProductsFilters({
         <div className="flex items-center gap-2">
           <input type="hidden" name="perPage" value={perPage} />
           {lowOnly && <input type="hidden" name="low" value="1" />}
-          <button
-            className="px-3 py-2 rounded-xl border"
-            type="button"
-            onClick={() => apply({ q: qVal })}
-          >
+          <button className="px-3 py-2 rounded-xl border" type="submit">
             Search
           </button>
           <a className="glass-btn px-3 py-2 rounded-2xl" href="/products">
