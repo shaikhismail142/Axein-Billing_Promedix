@@ -155,6 +155,7 @@ export async function POST(req: Request) {
       return NextResponse.json({ ok: false, error: "Name is required" }, { status: 400 });
     }
 
+    const category = payload.category != null ? String(payload.category).trim() : null;
     const meta = {
       selling_price: Number(payload.selling_price ?? payload.price ?? 0) || 0,
       gst_slab: Number(payload.gst_slab ?? 0) || 0,
@@ -163,16 +164,30 @@ export async function POST(req: Request) {
       sku: payload.sku != null ? String(payload.sku) : null,
       brand: payload.brand != null ? String(payload.brand) : null,
       hsn_code: payload.hsn_code != null ? String(payload.hsn_code) : null,
+      category: category || null,
       unit: payload.unit != null ? String(payload.unit) : null,
       notes: payload.notes != null ? String(payload.notes) : null,
     };
 
-    const { rows } = await pool.query(
-      `INSERT INTO products (name, meta)
-       VALUES ($1, $2::jsonb)
-       RETURNING id, name, meta`,
-      [name, JSON.stringify(meta)]
-    );
+    // Try to insert category into column if it exists (best-effort)
+    let rows: any[] = [];
+    try {
+      const r = await pool.query(
+        `INSERT INTO products (name, category, meta)
+         VALUES ($1, $2, $3::jsonb)
+         RETURNING id, name, meta`,
+        [name, category || null, JSON.stringify(meta)]
+      );
+      rows = r.rows;
+    } catch {
+      const r = await pool.query(
+        `INSERT INTO products (name, meta)
+         VALUES ($1, $2::jsonb)
+         RETURNING id, name, meta`,
+        [name, JSON.stringify(meta)]
+      );
+      rows = r.rows;
+    }
 
     return NextResponse.json({ ok: true, item: rows[0] }, { status: 201 });
   } catch (e: any) {

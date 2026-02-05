@@ -17,9 +17,15 @@ function s(v: unknown) {
 }
 
 async function readMeta(id: number) {
-  const r = await pool.query(`SELECT id, name, meta FROM products WHERE id=$1`, [id]);
-  if (r.rowCount === 0) return null;
-  return r.rows[0] as { id: number; name: string; meta: any };
+  try {
+    const r = await pool.query(`SELECT id, name, meta, category FROM products WHERE id=$1`, [id]);
+    if (r.rowCount === 0) return null;
+    return r.rows[0] as { id: number; name: string; meta: any; category?: string | null };
+  } catch {
+    const r = await pool.query(`SELECT id, name, meta FROM products WHERE id=$1`, [id]);
+    if (r.rowCount === 0) return null;
+    return r.rows[0] as { id: number; name: string; meta: any; category?: string | null };
+  }
 }
 async function writeMeta(id: number, patch: Record<string, any>) {
   const cur = await readMeta(id);
@@ -42,6 +48,7 @@ export async function GET(_req: Request, { params }: { params: { id: string } })
     ok: true,
     id: row.id,
     name: row.name,
+    category: s((row as any).category) ?? s(m.category),
     selling_price: n(m.selling_price ?? m.price) ?? 0,
     gst_slab: n(m.gst_slab) ?? 0,
     stock_qty: n(m.stock_qty ?? m.stock) ?? 0,
@@ -94,12 +101,23 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
   const notes = s(body.notes);
   if (notes !== undefined) patch.notes = notes;
 
+  const category = s(body.category);
+  if (category !== undefined) patch.category = category;
+
   if (Object.keys(patch).length === 0) {
     return NextResponse.json({ ok: true, message: "nothing to update" });
   }
 
   const updated = await writeMeta(id, patch);
   if (!updated) return NextResponse.json({ ok: false, error: "not found" }, { status: 404 });
+
+  // Best-effort sync to column if it exists
+  if (category !== undefined) {
+    try {
+      await pool.query(`UPDATE products SET category=$2 WHERE id=$1`, [id, category]);
+    } catch {}
+  }
+
   return NextResponse.json({ ok: true, item: updated });
 }
 

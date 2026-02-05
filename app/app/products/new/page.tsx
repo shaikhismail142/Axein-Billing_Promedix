@@ -1,12 +1,25 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 export default function NewProductPage() {
   const router = useRouter();
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  const [categories, setCategories] = useState<string[]>([]);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const res = await fetch("/api/categories", { cache: "no-store" });
+        if (!res.ok) return;
+        const j = await res.json();
+        const names = Array.isArray(j?.items) ? j.items.map((c: any) => String(c?.name || "").trim()).filter(Boolean) : [];
+        setCategories(names);
+      } catch {}
+    })();
+  }, []);
 
   async function onSubmit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
@@ -18,6 +31,7 @@ export default function NewProductPage() {
     try {
       const payload: any = {
         name,
+        category: String(fd.get("category") || "").trim() || null,
         selling_price: Number(fd.get("selling_price") || 0),
         gst_slab: Number(fd.get("gst_slab") || 0),
         stock_qty: Number(fd.get("stock_qty") || 0),
@@ -28,6 +42,18 @@ export default function NewProductPage() {
         unit: String(fd.get("unit") || ""),
         notes: String(fd.get("notes") || ""),
       };
+      // If category is new, try creating it (best-effort)
+      const cat = payload.category;
+      if (cat && !categories.map((c) => c.toLowerCase()).includes(cat.toLowerCase())) {
+        try {
+          await fetch("/api/categories", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ name: cat }),
+          });
+        } catch {}
+      }
+
       const res = await fetch("/api/products", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -82,14 +108,23 @@ export default function NewProductPage() {
           </div>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
             <label>
+              <div>Category</div>
+              <input name="category" list="category-list" placeholder="e.g., medicines" />
+              <datalist id="category-list">
+                {categories.map((c) => (
+                  <option key={c} value={c} />
+                ))}
+              </datalist>
+            </label>
+            <label>
               <div>HSN</div>
               <input name="hsn_code" />
             </label>
-            <label>
-              <div>Unit</div>
-              <input name="unit" />
-            </label>
           </div>
+          <label>
+            <div>Unit</div>
+            <input name="unit" />
+          </label>
           <label>
             <div>Notes</div>
             <textarea name="notes" rows={3} />

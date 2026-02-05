@@ -1,11 +1,12 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 type EditFormProps = {
   id: number;
   name: string;
+  category?: string;
   selling_price: number;
   stock_qty: number;
   low_stock_threshold: number;
@@ -20,6 +21,20 @@ export default function EditForm(p: EditFormProps) {
   const router = useRouter();
   const [saving, setSaving] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
+  const [categories, setCategories] = useState<string[]>([]);
+  const labelStyle = { color: "var(--muted)" } as const;
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const res = await fetch("/api/categories", { cache: "no-store" });
+        if (!res.ok) return;
+        const j = await res.json();
+        const names = Array.isArray(j?.items) ? j.items.map((c: any) => String(c?.name || "").trim()).filter(Boolean) : [];
+        setCategories(names);
+      } catch {}
+    })();
+  }, []);
 
   async function onSubmit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
@@ -28,6 +43,7 @@ export default function EditForm(p: EditFormProps) {
 
     const form = new FormData(e.currentTarget);
     const payload = {
+      category: String(form.get("category") || "").trim() || null,
       selling_price: Number(form.get("selling_price") || 0),
       stock_qty: Number(form.get("stock_qty") || 0),
       low_stock_threshold: Number(form.get("low_stock_threshold") || 0),
@@ -61,58 +77,68 @@ export default function EditForm(p: EditFormProps) {
     <form onSubmit={onSubmit} className="space-y-4">
       <div className="rounded-xl border p-4 grid grid-cols-1 sm:grid-cols-2 gap-4">
         <div>
-          <label className="block text-sm text-gray-600">Name</label>
+          <label className="block text-sm" style={labelStyle}>Name</label>
           <input value={p.name} disabled className="border rounded-lg px-3 py-2 w-full opacity-70" />
-          <div className="text-xs text-gray-500 mt-1">Name editing not enabled here.</div>
+          <div className="text-xs mt-1" style={{ color: "var(--muted)" }}>Name editing not enabled here.</div>
         </div>
 
         <div>
-          <label className="block text-sm text-gray-600">Selling Price</label>
+          <label className="block text-sm" style={labelStyle}>Selling Price</label>
           <input name="selling_price" defaultValue={p.selling_price} type="number" step="0.01" className="border rounded-lg px-3 py-2 w-full" />
         </div>
 
         <div>
-          <label className="block text-sm text-gray-600">Stock Qty</label>
+          <label className="block text-sm" style={labelStyle}>Stock Qty</label>
           <input name="stock_qty" defaultValue={p.stock_qty} type="number" step="1" className="border rounded-lg px-3 py-2 w-full" />
         </div>
 
         <div>
-          <label className="block text-sm text-gray-600">Low Stock Threshold</label>
+          <label className="block text-sm" style={labelStyle}>Low Stock Threshold</label>
           <input name="low_stock_threshold" defaultValue={p.low_stock_threshold} type="number" step="1" className="border rounded-lg px-3 py-2 w-full" />
         </div>
 
         <div>
-          <label className="block text-sm text-gray-600">SKU</label>
+          <label className="block text-sm" style={labelStyle}>SKU</label>
           <input name="sku" defaultValue={p.sku} className="border rounded-lg px-3 py-2 w-full" />
         </div>
 
         <div>
-          <label className="block text-sm text-gray-600">Brand</label>
+          <label className="block text-sm" style={labelStyle}>Brand</label>
           <input name="brand" defaultValue={p.brand} className="border rounded-lg px-3 py-2 w-full" />
         </div>
 
         <div>
-          <label className="block text-sm text-gray-600">HSN Code</label>
+          <label className="block text-sm" style={labelStyle}>Category</label>
+          <input name="category" defaultValue={p.category ?? ""} list="category-list" className="border rounded-lg px-3 py-2 w-full" />
+          <datalist id="category-list">
+            {categories.map((c) => (
+              <option key={c} value={c} />
+            ))}
+          </datalist>
+        </div>
+
+        <div>
+          <label className="block text-sm" style={labelStyle}>HSN Code</label>
           <input name="hsn_code" defaultValue={p.hsn_code} className="border rounded-lg px-3 py-2 w-full" />
         </div>
 
         <div>
-          <label className="block text-sm text-gray-600">Unit</label>
+          <label className="block text-sm" style={labelStyle}>Unit</label>
           <input name="unit" defaultValue={p.unit} className="border rounded-lg px-3 py-2 w-full" />
         </div>
 
         <div className="sm:col-span-2">
-          <label className="block text-sm text-gray-600">Notes</label>
+          <label className="block text-sm" style={labelStyle}>Notes</label>
           <textarea name="notes" defaultValue={p.notes} rows={3} className="border rounded-lg px-3 py-2 w-full" />
         </div>
       </div>
 
       <div className="flex items-center gap-2">
-        <button disabled={saving} className="px-4 py-2 rounded-xl bg-blue-600 text-white">
+        <button disabled={saving} className="btn-primary">
           {saving ? "Saving…" : "Save"}
         </button>
-        <a className="px-4 py-2 rounded-xl border" href="/products">Cancel</a>
-        {msg && <span className="text-sm text-red-600">{msg}</span>}
+        <a className="btn btn-outline" href="/products">Cancel</a>
+        {msg && <span className="text-sm" style={{ color: "var(--danger)" }}>{msg}</span>}
       </div>
     </form>
   );

@@ -4,7 +4,7 @@ import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { useEffect } from 'react';
 
-type SidebarProps = { open?: boolean; onClose?: () => void };
+type SidebarProps = { open?: boolean; onClose?: () => void; collapsed?: boolean };
 
 const nav = [
   { href: '/', label: 'Dashboard' },
@@ -15,7 +15,7 @@ const nav = [
   { href: '/settings', label: 'Settings' },
 ];
 
-export default function Sidebar({ open = false, onClose }: SidebarProps) {
+export default function Sidebar({ open = false, onClose, collapsed = false }: SidebarProps) {
   const pathname = usePathname();
 
   useEffect(() => {
@@ -26,30 +26,48 @@ export default function Sidebar({ open = false, onClose }: SidebarProps) {
   }, [open]);
 
   const Nav = (
-    <nav className="space-y-1 p-4">
-      <div className="mb-3 text-xs font-semibold uppercase tracking-wide" style={{ color: 'var(--muted)' }}>
-        AxEin Billing
-      </div>
+    <nav className={`space-y-1 ${collapsed ? "p-3" : "p-4"}`}>
+      {!collapsed && (
+        <div className="mb-3 text-xs font-semibold uppercase tracking-wide" style={{ color: 'var(--muted)' }}>
+          AxEin Billing
+        </div>
+      )}
       {nav.map((item) => {
         const active =
           item.href === '/'
             ? pathname === '/'
             : pathname === item.href || pathname.startsWith(item.href + '/');
+        const icon = item.label.slice(0, 1).toUpperCase();
         return (
           <Link
             key={item.href}
             href={item.href}
             onClick={onClose}
-            className="block rounded-xl px-3 py-2 text-sm transition-colors"
+            title={item.label}
+            className={[
+              "group flex items-center gap-3 rounded-xl px-3 py-2 text-sm transition-colors",
+              collapsed ? "justify-center" : "",
+            ].join(" ")}
             style={{
               color: 'var(--text)',
               border: `1px solid ${active ? 'color-mix(in oklab, var(--primary) 35%, transparent)' : 'transparent'}`,
               background: active
-                ? 'color-mix(in oklab, var(--primary) 14%, transparent)'
+                ? 'color-mix(in oklab, var(--primary) 18%, transparent)'
                 : 'transparent'
             }}
+            aria-current={active ? "page" : undefined}
           >
-            {item.label}
+            <span
+              className="inline-flex h-8 w-8 items-center justify-center rounded-lg text-xs font-semibold"
+              style={{
+                background: 'color-mix(in oklab, var(--surface-1) 70%, transparent)',
+                border: '1px solid var(--glass-brd)',
+              }}
+              aria-hidden
+            >
+              {icon}
+            </span>
+            {!collapsed && <span className="truncate">{item.label}</span>}
           </Link>
         );
       })}
@@ -109,7 +127,7 @@ export default function Sidebar({ open = false, onClose }: SidebarProps) {
 
       {/* Desktop / tablet (sticky) */}
       <aside
-        className="sticky top-0 hidden h-[100dvh] w-64 shrink-0 sm:block"
+        className={`sticky top-0 hidden h-[100dvh] shrink-0 sm:block transition-[width] duration-200 ${collapsed ? "w-20" : "w-64"}`}
         style={{
           borderRight: '1px solid var(--glass-brd)',
           background: 'var(--glass-bg)',

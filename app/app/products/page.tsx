@@ -137,16 +137,26 @@ function PerPagePicker({ qs, value }: { qs: URLSearchParams; value: number }) {
     sp.set("page", "1");
     return `/products?${sp.toString()}`;
   };
+  const chipStyle = (active: boolean) => ({
+    border: "1px solid var(--glass-brd)",
+    background: active ? "color-mix(in oklab, var(--primary) 12%, var(--surface-1))" : "transparent",
+    color: "var(--text)",
+    borderRadius: 10,
+    padding: "4px 8px",
+    textDecoration: "none",
+    fontWeight: 600,
+    fontSize: 12,
+  });
   return (
     <div className="inline-flex items-center gap-1 text-sm">
-      <span className="text-gray-600">Show</span>
-      <Link className={`px-2 py-1 rounded-lg border ${value === 20 ? "bg-gray-100" : ""}`} href={mk(20)}>
+      <span style={{ color: "var(--muted)" }}>Show</span>
+      <Link style={chipStyle(value === 20)} href={mk(20)}>
         20
       </Link>
-      <Link className={`px-2 py-1 rounded-lg border ${value === 50 ? "bg-gray-100" : ""}`} href={mk(50)}>
+      <Link style={chipStyle(value === 50)} href={mk(50)}>
         50
       </Link>
-      <Link className={`px-2 py-1 rounded-lg border ${value === 100 ? "bg-gray-100" : ""}`} href={mk(100)}>
+      <Link style={chipStyle(value === 100)} href={mk(100)}>
         100
       </Link>
     </div>
@@ -347,7 +357,7 @@ export default async function ProductsPage({ searchParams }: { searchParams: Pag
                 })}
                 {items.length === 0 && (
                   <tr>
-                    <td colSpan={12} className="px-3 py-6 text-center text-gray-500">
+                    <td colSpan={12} className="px-3 py-6 text-center" style={{ color: "var(--muted)" }}>
                       No products found
                     </td>
                   </tr>
@@ -360,7 +370,7 @@ export default async function ProductsPage({ searchParams }: { searchParams: Pag
         {/* Pagination */}
         {!errorMsg && (
           <div className="flex items-center justify-between">
-            <div className="text-sm text-gray-600">
+            <div className="text-sm" style={{ color: "var(--muted)" }}>
               Page {page} of {totalPages} • {total} results
             </div>
             <div className="flex items-center gap-2">

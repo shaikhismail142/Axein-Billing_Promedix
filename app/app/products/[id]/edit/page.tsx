@@ -8,6 +8,7 @@ type ProductApi = {
   error?: string;
   id: number;
   name: string;
+  category?: string;
   selling_price?: number;
   stock_qty?: number;
   low_stock_threshold?: number;
@@ -88,6 +89,7 @@ export default async function Page({ params }: { params: { id: string } }) {
       <EditForm
         id={data.id}
         name={data.name}
+        category={data.category ?? ""}
         selling_price={data.selling_price ?? 0}
         stock_qty={data.stock_qty ?? 0}
         low_stock_threshold={data.low_stock_threshold ?? 0}
