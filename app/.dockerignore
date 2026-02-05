@@ -1,0 +1,28 @@
+# Keep build context small & safe
+node_modules
+.next
+.git
+.DS_Store
+npm-debug.log
+yarn-error.log
+pnpm-debug.log
+coverage
+dist
+
+# Env files – provide via compose/env vars instead
+.env
+.env.local
+.env.development
+.env.production
+.env.test
+
+# Don’t ignore your source:
+# (we WANT these included so the builder can compile)
+# app/
+# pages/
+# components/
+# public/
+# styles/
+# tailwind.config.js
+# postcss.config.js
+# tsconfig.json

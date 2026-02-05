@@ -1,0 +1,22 @@
+<!doctype html><html><head><meta charset="utf-8" />
+<style>
+  body { width: 72mm; font-family: monospace; font-size: 12px; }
+  .center { text-align: center; }
+  table { width: 100%; }
+  td { padding: 2px 0; }
+</style></head><body>
+<div class="center">{{shop.name}}<br/>GSTIN: {{shop.gstin}}</div>
+<div>Inv {{sale.number}} | {{sale.invoice_date}}</div>
+<div>To: {{customer.name}}</div>
+<hr/>
+<table>
+  {{#each items}}
+  <tr><td>{{name}} x{{qty}}</td><td style="text-align:right">{{amount}}</td></tr>
+  {{/each}}
+</table>
+<hr/>
+<div>Taxable: {{totals.taxable}}</div>
+<div>Tax: {{totals.tax}}</div>
+<div><strong>Total: {{totals.total}}</strong></div>
+<div class="center">Thank you!</div>
+</body></html>

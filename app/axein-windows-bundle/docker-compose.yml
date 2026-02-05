@@ -1,0 +1,96 @@
+name: axein
+
+services:
+  db:
+    image: postgres:16.4
+    environment:
+      POSTGRES_USER: app
+      POSTGRES_PASSWORD: app
+      POSTGRES_DB: app
+      TZ: Asia/Kolkata
+    volumes:
+      - dbdata:/var/lib/postgresql/data
+      - ./backups/postgres:/backups
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U app -d app || exit 1"]
+      interval: 5s
+      timeout: 4s
+      retries: 12
+    restart: unless-stopped
+
+  minio:
+    image: minio/minio:RELEASE.2024-08-17T01-24-54Z
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: minio
+      MINIO_ROOT_PASSWORD: miniominiom
+    ports:
+      - "9000:9000"   # S3 API
+      - "9003:9001"   # Web Console
+    volumes:
+      - miniodata:/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:9000/minio/health/ready || exit 1"]
+      interval: 5s
+      timeout: 4s
+      retries: 30
+    restart: unless-stopped
+
+  redis:
+    image: redis:7.2.5
+    restart: unless-stopped
+
+  mailpit:
+    image: axllent/mailpit:latest
+    ports:
+      - "8025:8025"   # UI
+      - "1025:1025"   # SMTP
+    restart: unless-stopped
+
+  # One-shot SQL runner (invoke only when needed)
+  migrate:
+    image: postgres:16.4
+    profiles: ["manual"]
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes:
+      - ./db/migrations:/migrations:ro
+    entrypoint:
+      - sh
+      - -lc
+      - >
+        set -eu;
+        echo "==> Applying SQL migrations in ASCII order";
+        LC_ALL=C ls -1 /migrations/*.sql | LC_ALL=C sort | sed 's/^/  - /';
+        for f in $$(LC_ALL=C ls -1 /migrations/*.sql | LC_ALL=C sort); do
+          echo "----> $$f";
+          psql "postgresql://app:app@db:5432/app" -v ON_ERROR_STOP=1 -f "$$f";
+        done;
+        echo "==> All migrations applied";
+    restart: "no"
+
+  web:
+    image: ghcr.io/shaikhismail142/axein-billing:v0.4.1
+    platform: linux/amd64           # Windows/Intel/WSL2 friendly
+    env_file: .env
+    depends_on:
+      db:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      redis:
+        condition: service_started
+      mailpit:
+        condition: service_started
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./logs:/var/log/axein
+      - webdata:/var/axein
+    restart: unless-stopped
+
+volumes:
+  dbdata: {}
+  miniodata: {}
+  webdata: {}

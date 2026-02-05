@@ -1,0 +1,6 @@
+{
+  "kid": "ed25519-v1",
+  "algorithm": "Ed25519",
+  "publicKey_pem": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAb5mB0eifFbLbrfvp5JNYwJ5ULHL2Iu61GFcgwue/nzI=\n-----END PUBLIC KEY-----\n",
+  "publicKey_spki_base64": "MCowBQYDK2VwAyEAb5mB0eifFbLbrfvp5JNYwJ5ULHL2Iu61GFcgwue/nzI="
+}

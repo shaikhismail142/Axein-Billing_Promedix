@@ -1,0 +1,264 @@
+/* Tailwind v4 */
+@import url("https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap");
+@import "tailwindcss";
+
+/* =========================
+   THEME TOKENS
+   ========================= */
+@layer base {
+  :root {
+    /* Surfaces & text */
+    --bg:           #f4f8f7;         /* soft clinical white */
+    --surface-1:    rgba(255,255,255,0.90);
+    --surface-2:    rgba(255,255,255,0.72);
+    --text:         #0b1220;         /* deep navy */
+    --muted:        #5f6c7b;         /* muted blue-gray */
+    --popover-bg:   rgba(3,7,18,0.94);
+    --popover-text: #ffffff;
+
+    /* Brand */
+    --primary:      #0ea5a4;         /* teal-500 */
+    --primary-600:  #0f766e;         /* teal-700 */
+    --success:      #16a34a;         /* green-600 */
+    --warning:      #f59e0b;         /* amber-500 */
+    --danger:       #ef4444;         /* red-500 */
+
+    /* Borders & table */
+    --border:       rgba(15,23,42,0.12);
+    --thead:        rgba(237,244,247,0.96);
+
+    /* Effects */
+    --shadow:       0 10px 28px rgba(2,6,23,0.10);
+    --glass-bg:     var(--surface-2);
+    --glass-brd:    var(--border);
+    --ring:         color-mix(in oklab, var(--primary) 55%, transparent);
+  }
+
+  .dark {
+    --bg:           #0b1418;         /* deep teal slate */
+    --surface-1:    rgba(12,20,26,0.92);
+    --surface-2:    rgba(14,24,30,0.60);
+    --text:         #e6edf3;
+    --muted:        #9fb0bf;
+    --popover-bg:   rgba(3,7,18,0.96);
+    --popover-text: #e6edf3;
+
+    --border:       rgba(84,102,119,0.45);
+    --thead:        rgba(7,12,16,0.90);
+
+    --shadow:       0 12px 36px rgba(0,0,0,0.55);
+    --glass-bg:     rgba(15,25,32,0.60);
+    --glass-brd:    rgba(148,163,184,0.22);
+    --ring:         color-mix(in oklab, var(--primary) 65%, transparent);
+  }
+
+  html { color-scheme: light dark; }   /* ⬅ add this line */
+  html, body { height: 100%; }
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: "Manrope", "Plus Jakarta Sans", "Segoe UI", system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale;
+
+    /* subtle radial accents, balanced for both themes */
+    background:
+      radial-gradient(900px 560px at 10% -10%, color-mix(in oklab, var(--primary) 12%, transparent), transparent 60%),
+      radial-gradient(820px 540px at 95% 0%, color-mix(in oklab, var(--success) 10%, transparent), transparent 60%),
+      var(--bg);
+    background-attachment: fixed;
+  }
+
+  a {
+    color: color-mix(in oklab, var(--primary) 85%, #fff 0%);
+    text-decoration: underline; text-underline-offset: 3px;
+  }
+
+  /* Focus outline for a11y */
+  :where(button, a, input, select, textarea):focus-visible {
+    outline: 2px solid var(--ring);
+    outline-offset: 2px;
+  }
+}
+
+/* =========================
+   LAYOUT
+   ========================= */
+.app-shell { display:flex; flex-direction:column; min-height:100%; }
+.app-main  { flex:1; }
+.container { max-width:1120px; margin:16px auto; padding:0 16px; }
+
+/* Header / chrome */
+.app-header {
+  display:flex; align-items:center; gap:12px;
+  padding:10px 14px; position:sticky; top:0; z-index:50;
+  backdrop-filter: blur(14px) saturate(140%);
+  background: var(--glass-bg);
+  border-bottom: 1px solid var(--glass-brd);
+  margin: 8px;
+  border-radius: 12px;
+}
+.brand { font-weight:800; letter-spacing:.3px; text-decoration:none; color:var(--text); padding:6px 8px; border-radius:10px; }
+.nav { display:flex; gap:6px; margin-left:10px; flex-wrap:wrap; }
+.navlink {
+  text-decoration:none; color:var(--text); padding:8px 10px;
+  border:1px solid transparent; border-radius:10px;
+}
+.navlink:hover { background:var(--glass-bg); border-color:var(--glass-brd); }
+.navlink.active {
+  background:color-mix(in oklab, var(--primary) 15%, transparent);
+  border-color:color-mix(in oklab, var(--primary) 35%, transparent);
+  font-weight:700;
+}
+.spacer { flex:1; }
+
+/* =========================
+   CARDS & GLASS
+   ========================= */
+.card {
+  background: var(--surface-1);
+  border: 1px solid var(--glass-brd);
+  border-radius: 14px;
+  box-shadow: var(--shadow);
+}
+.glass {
+  background: var(--glass-bg);
+  border: 1px solid var(--glass-brd);
+  border-radius: 16px;
+  box-shadow: var(--shadow);
+}
+
+/* =========================
+   FORMS & BUTTONS
+   ========================= */
+input, select, textarea {
+  background: var(--glass-bg);
+  border: 1px solid var(--glass-brd);
+  border-radius: 10px;
+  padding: 8px 10px;
+  color: var(--text);
+  outline: none;
+}
+input::placeholder, textarea::placeholder { color: var(--muted); }
+input:focus, select:focus, textarea:focus {
+  border-color: var(--ring);
+  box-shadow: 0 0 0 3px color-mix(in oklab, var(--primary) 18%, transparent);
+}
+
+button {
+  border: 1px solid var(--glass-brd);
+  background: var(--glass-bg);
+  color: var(--text);
+  border-radius: 12px;
+  padding: 8px 12px;
+  cursor: pointer;
+  transition: transform .02s ease, filter .12s ease, opacity .12s ease;
+}
+button:hover { filter: brightness(0.98); }
+button:active { transform: translateY(1px); }
+button:disabled { opacity: .6; cursor: not-allowed; }
+
+.btn-primary {
+  background: linear-gradient(180deg, var(--primary), var(--primary-600));
+  color: white;
+  border-color: color-mix(in oklab, var(--primary) 50%, transparent);
+}
+.btn-outline {
+  background: transparent;
+  border-color: var(--glass-brd);
+}
+.btn-danger {
+  background: linear-gradient(180deg, var(--danger), #dc2626);
+  color: white;
+  border-color: color-mix(in oklab, var(--danger) 50%, transparent);
+}
+.glass-btn {
+  padding: 6px 10px; border-radius: 999px;
+  border: 1px solid var(--glass-brd); background: var(--glass-bg);
+}
+
+/* Convenience classes used across pages */
+.btn {
+  border: 1px solid var(--glass-brd);
+  background: var(--glass-bg);
+  color: var(--text);
+  border-radius: 12px;
+  padding: 8px 12px;
+  cursor: pointer;
+}
+.input {
+  background: var(--glass-bg);
+  border: 1px solid var(--glass-brd);
+  border-radius: 10px;
+  padding: 8px 10px;
+  color: var(--text);
+  outline: none;
+}
+
+/* =========================
+   TABLES (polished)
+   ========================= */
+.table-wrap {
+  overflow: auto;
+  border-radius: 12px;
+  border: 1px solid var(--glass-brd);
+  background: var(--surface-1);
+}
+
+.table { width: 100%; border-collapse: collapse; }
+.table thead {
+  position: sticky; top: 0; z-index: 2;
+  background: var(--thead);
+  backdrop-filter: blur(3px);
+}
+.table th, .table td {
+  border-top: 1px solid var(--border);
+  padding: 10px 12px;
+  vertical-align: middle;
+  text-align: left;
+}
+.table tbody tr:nth-child(even) {
+  background: color-mix(in oklab, var(--bg) 85%, var(--text) 5%);
+}
+.table tbody tr:hover { background: color-mix(in oklab, var(--bg) 80%, var(--text) 8%); }
+.table th { font-weight: 700; color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .03em; }
+
+/* =========================
+   UTILITIES
+   ========================= */
+.muted { color: var(--muted); }
+.no-print {}
+
+.hr {
+  height:1px; background: var(--border);
+  border:0; margin: 8px 0;
+}
+
+/* =========================
+   PRINT
+   ========================= */
+@page { size: A4; margin: 12mm; }
+@media print {
+  header, nav, aside, #site-chrome, .app-header, .sidebar,
+  .no-print, .btn-primary, .btn-outline, .btn-danger { display: none !important; }
+
+  html, body { background: #ffffff !important; color: #000 !important; }
+  * { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+
+  body * { visibility: hidden; }
+  .print-area, .print-area * { visibility: visible; }
+
+  .container { max-width: 100% !important; margin: 0 !important; padding: 0 !important; }
+  .print-area { position: static; margin: 0 !important; }
+  .glass, .card { box-shadow: none !important; background: #fff !important; border: 0 !important; }
+
+  table { width: 100% !important; border-collapse: collapse !important; }
+  .table th, .table td { border: 1px solid #000 !important; padding: 6px 8px !important; }
+  .table thead { background: #eee !important; color: #000 !important; }
+  thead { display: table-header-group; }
+  tfoot { display: table-footer-group; }
+  tr, td, th, table { break-inside: avoid; page-break-inside: avoid; }
+  .no-break { break-inside: avoid; page-break-inside: avoid; }
+}

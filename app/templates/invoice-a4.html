@@ -1,0 +1,34 @@
+<!doctype html><html><head><meta charset="utf-8" />
+<title>Tax Invoice</title>
+<style>
+  body { font-family: Inter, Arial, sans-serif; }
+  .sheet { width: 210mm; padding: 16mm; }
+  table { width: 100%; border-collapse: collapse; }
+  th, td { border: 1px solid #333; padding: 6px; font-size: 12px; }
+  .right { text-align: right; }
+</style></head><body>
+<div class="sheet">
+  <h2>Tax Invoice</h2>
+  <div><strong>{{shop.name}}</strong> • GSTIN: {{shop.gstin}}<br/>{{shop.address}}</div>
+  <div>Invoice: {{sale.number}} • Date: {{sale.invoice_date}} • Customer: {{customer.name}} ({{customer.gstin||'Unregistered'}})</div>
+  <table>
+    <thead><tr><th>Item</th><th>HSN</th><th class="right">Qty</th><th class="right">Rate</th><th class="right">Disc%</th><th class="right">GST%</th><th class="right">Amount</th></tr></thead>
+    <tbody>
+      {{#each items}}
+      <tr><td>{{name}}</td><td>{{hsn}}</td><td class="right">{{qty}}</td><td class="right">{{rate}}</td><td class="right">{{discount}}</td><td class="right">{{gst}}</td><td class="right">{{amount}}</td></tr>
+      {{/each}}
+    </tbody>
+  </table>
+  <p class="right">Taxable: {{totals.taxable}} | Tax: {{totals.tax}} | Round Off: {{sale.round_off}} | <strong>Grand Total: {{totals.total}}</strong></p>
+  <h4>HSN Summary</h4>
+  <table>
+    <thead><tr><th>HSN</th><th>Taxable</th><th>CGST</th><th>SGST</th><th>IGST</th><th>Total Tax</th></tr></thead>
+    <tbody>
+      {{#each hsnSummary}}
+      <tr><td>{{hsn}}</td><td class="right">{{taxable}}</td><td class="right">{{cgst}}</td><td class="right">{{sgst}}</td><td class="right">{{igst}}</td><td class="right">{{tax}}</td></tr>
+      {{/each}}
+    </tbody>
+  </table>
+  <p>QR: {{sale.qr_payload}}</p>
+  <p>For {{shop.name}}<br/>Authorised Signatory</p>
+</div></body></html>

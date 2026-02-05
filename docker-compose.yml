@@ -1,0 +1,88 @@
+name: axein
+services:
+  db:
+    image: postgres:16.4
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgrespass
+      TZ: Asia/Kolkata
+    ports: ["5432:5432"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+    shm_size: "1g"
+    volumes:
+      - type: bind
+        source: /Users/nadiya/AxEin/data/postgres
+        target: /var/lib/postgresql/data
+      - type: bind
+        source: /Users/nadiya/AxEin/backups/postgres
+        target: /backups
+      - type: bind
+        source: /Users/nadiya/AxEin/init
+        target: /docker-entrypoint-initdb.d
+  redis:
+    image: redis:7
+    ports: ["6379:6379"]
+    restart: unless-stopped
+
+  minio:
+    image: minio/minio:latest
+    command: ["server", "/data", "--console-address", ":9001"]
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    ports: ["9000:9000", "9003:9001"]
+    volumes:
+      - type: bind
+        source: /Users/nadiya/AxEin/data/minio
+        target: /data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:9000/minio/health/ready || exit 1"]
+      interval: 5s
+      timeout: 4s
+      retries: 40
+    restart: unless-stopped
+
+  mailpit:
+    image: axllent/mailpit:latest
+    ports: ["8025:8025", "1025:1025"]
+    restart: unless-stopped
+
+  web:
+    image: ghcr.io/shaikhismail142/axein-billing:latest
+    platform: linux/amd64
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_started
+      minio:
+        condition: service_healthy
+      mailpit:
+        condition: service_started
+    environment:
+      NODE_ENV: production
+      TZ: Asia/Kolkata
+      PORT: "3000"
+      NEXT_PUBLIC_BASE_URL: http://localhost:3000
+      DATABASE_URL: postgresql://axeindb:axeindbpass@db:5432/axeindb
+      POSTGRES_HOST: db
+      POSTGRES_PORT: "5432"
+      POSTGRES_USER: axeindb
+      POSTGRES_PASSWORD: axeindbpass
+      POSTGRES_DB: axeindb
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      S3_ENDPOINT: http://minio:9000
+      S3_KEY: minioadmin
+      S3_SECRET: minioadmin
+      S3_BUCKET: axein
+      S3_REGION: ap-south-1
+      S3_FORCE_PATH_STYLE: "true"
+      LICENSE_PUBLIC_KEY: "MCowBQYDK2VwAyEAqT1eqX1xtiJsh+wpn2HoKnxHylqVF4yN4QCzbgUXb3s="
+    ports: ["3000:3000"]
+    restart: unless-stopped
+

@@ -1,0 +1,31 @@
+# Dependencies & builds
+node_modules/
+.next/
+.out/
+dist/
+coverage/
+
+# OS / IDE junk
+.DS_Store
+
+# Env files (keep example tracked)
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+!.env.example
+
+# Runtime / data dirs (generated at runtime, not source)
+backups/
+pgdata/
+redisdata/
+miniodata/
+logs/
+
+# DB / misc artifacts
+*.log
+*.sqlite
+*.sqlite-journal
+tools/license-keygen/ed25519-private.pem
+tools/license-keygen/licenses/

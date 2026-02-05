@@ -1,0 +1,11 @@
+{
+    "sub": "Acme Traders Pvt Ltd",
+    "plan": "pro",
+    "seats": 3,
+    "features": ["quotations", "invoices", "backup"],
+    "expires_at": "2026-09-27T00:00:00Z",
+    "device_lock": false,
+    "device_hash": null,
+    "kid": "ed25519-v1"
+  }
+  

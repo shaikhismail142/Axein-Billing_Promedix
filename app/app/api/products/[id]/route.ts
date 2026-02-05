@@ -1,0 +1,133 @@
+// app/api/products/[id]/route.ts
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
+
+import { NextResponse } from "next/server";
+import { pool } from "@/app/lib/db"; // change to "@/lib/db" if that's your real path
+
+function n(v: unknown) {
+  if (v === null || v === undefined || v === "") return undefined;
+  const x = Number(v);
+  return Number.isFinite(x) ? x : undefined;
+}
+function s(v: unknown) {
+  if (v === null || v === undefined) return undefined;
+  const t = String(v).trim();
+  return t === "" ? undefined : t;
+}
+
+async function readMeta(id: number) {
+  const r = await pool.query(`SELECT id, name, meta FROM products WHERE id=$1`, [id]);
+  if (r.rowCount === 0) return null;
+  return r.rows[0] as { id: number; name: string; meta: any };
+}
+async function writeMeta(id: number, patch: Record<string, any>) {
+  const cur = await readMeta(id);
+  if (!cur) return null;
+  const next = { ...(cur.meta || {}), ...patch };
+  await pool.query(`UPDATE products SET meta=$2::jsonb WHERE id=$1`, [id, JSON.stringify(next)]);
+  return readMeta(id);
+}
+
+// GET /api/products/:id
+export async function GET(_req: Request, { params }: { params: { id: string } }) {
+  const id = Number(params.id);
+  if (!Number.isFinite(id)) return NextResponse.json({ ok: false, error: "invalid id" }, { status: 400 });
+
+  const row = await readMeta(id);
+  if (!row) return NextResponse.json({ ok: false, error: "not found" }, { status: 404 });
+
+  const m = row.meta || {};
+  return NextResponse.json({
+    ok: true,
+    id: row.id,
+    name: row.name,
+    selling_price: n(m.selling_price ?? m.price) ?? 0,
+    gst_slab: n(m.gst_slab) ?? 0,
+    stock_qty: n(m.stock_qty ?? m.stock) ?? 0,
+    low_stock_threshold: n(m.low_stock_threshold) ?? 0,
+    cost_price: n(m.cost_price),
+    sku: s(m.sku),
+    brand: s(m.brand),
+    hsn_code: s(m.hsn_code),
+    unit: s(m.unit),
+    notes: s(m.notes),
+    meta: m,
+  });
+}
+
+// PATCH /api/products/:id
+export async function PATCH(req: Request, { params }: { params: { id: string } }) {
+  const id = Number(params.id);
+  if (!Number.isFinite(id)) return NextResponse.json({ ok: false, error: "invalid id" }, { status: 400 });
+
+  const body = await req.json().catch(() => ({}));
+  const patch: Record<string, any> = {};
+
+  const price = n(body.selling_price ?? body.price);
+  if (price !== undefined) patch.selling_price = price;
+
+  const gst = n(body.gst_slab);
+  if (gst !== undefined) patch.gst_slab = gst;
+
+  const stock = n(body.stock_qty ?? body.stock);
+  if (stock !== undefined) patch.stock_qty = stock;
+
+  const low = n(body.low_stock_threshold);
+  if (low !== undefined) patch.low_stock_threshold = low;
+
+  const cost = n(body.cost_price);
+  if (cost !== undefined) patch.cost_price = cost;
+
+  const sku = s(body.sku);
+  if (sku !== undefined) patch.sku = sku;
+
+  const brand = s(body.brand);
+  if (brand !== undefined) patch.brand = brand;
+
+  const hsn = s(body.hsn_code);
+  if (hsn !== undefined) patch.hsn_code = hsn;
+
+  const unit = s(body.unit);
+  if (unit !== undefined) patch.unit = unit;
+
+  const notes = s(body.notes);
+  if (notes !== undefined) patch.notes = notes;
+
+  if (Object.keys(patch).length === 0) {
+    return NextResponse.json({ ok: true, message: "nothing to update" });
+  }
+
+  const updated = await writeMeta(id, patch);
+  if (!updated) return NextResponse.json({ ok: false, error: "not found" }, { status: 404 });
+  return NextResponse.json({ ok: true, item: updated });
+}
+
+// Aliases
+export async function PUT(req: Request, ctx: { params: { id: string } }) {
+  return PATCH(req, ctx);
+}
+export async function POST(req: Request, ctx: { params: { id: string } }) {
+  const ct = req.headers.get("content-type") || "";
+  if (ct.includes("application/json")) return PATCH(req, ctx);
+
+  const form = await req.formData();
+  if (String(form.get("_method") || "").toUpperCase() !== "PATCH") {
+    return NextResponse.json({ ok: false, error: "Only PATCH supported" }, { status: 405 });
+  }
+
+  const id = Number(ctx.params.id);
+  if (!Number.isFinite(id)) return NextResponse.json({ ok: false, error: "invalid id" }, { status: 400 });
+
+  const patch: Record<string, any> = {};
+  const low = n(form.get("low_stock_threshold"));
+  if (low !== undefined) patch.low_stock_threshold = low;
+  const stock = n(form.get("stock_qty") ?? form.get("stock"));
+  if (stock !== undefined) patch.stock_qty = stock;
+  const price = n(form.get("selling_price") ?? form.get("price"));
+  if (price !== undefined) patch.selling_price = price;
+
+  const updated = await writeMeta(id, patch);
+  if (!updated) return NextResponse.json({ ok: false, error: "not found" }, { status: 404 });
+  return NextResponse.redirect(new URL("/inventory/low-stock", req.url), { status: 303 });
+}

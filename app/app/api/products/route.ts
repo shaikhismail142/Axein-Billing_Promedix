@@ -1,0 +1,181 @@
+// app/api/products/route.ts
+import { NextResponse } from "next/server";
+import { pool } from "@/app/lib/db";
+
+/* =========================
+   GET /api/products
+   ?page=&perPage=&q=
+   Returns: { items, total, page, perPage, totalPages }
+   NOTE: derives price/stock/low/sku from meta only (no hard deps on flat cols)
+========================= */
+export async function GET(req: Request) {
+  const url = new URL(req.url);
+  const page = Math.max(1, Number(url.searchParams.get("page") || 1));
+  const perPage = Math.min(200, Math.max(1, Number(url.searchParams.get("perPage") || 20)));
+  const q = (url.searchParams.get("q") || "").trim();
+
+  // Build WHERE (name or meta->>'sku')
+  const where: string[] = [];
+  const params: unknown[] = [];
+  if (q) {
+    params.push(`%${q}%`);
+    const i = params.length;
+    where.push(`(p.name ILIKE $${i} OR (p.meta->>'sku') ILIKE $${i})`);
+  }
+  const whereSql = where.length ? `WHERE ${where.join(" AND ")}` : "";
+
+  // Count
+  const { rows: cnt } = await pool.query(
+    `SELECT COUNT(*)::int AS cnt FROM products p ${whereSql}`,
+    params
+  );
+  const total = cnt[0]?.cnt ?? 0;
+  const totalPages = Math.max(1, Math.ceil(total / perPage));
+  const offset = (page - 1) * perPage;
+
+  // Page
+  const pageParams = [...params, perPage, offset];
+  const { rows } = await pool.query(
+    `
+    SELECT
+      p.id,
+      p.name,
+      COALESCE(p.category, p.meta->>'category')                   AS category,
+      COALESCE(p.hsn_code, p.hsn, p.meta->>'hsn_code')            AS hsn_code,
+      COALESCE(NULLIF(p.meta->>'selling_price','')::numeric,
+               NULLIF(p.meta->>'price','')::numeric, 0)           AS price,
+      COALESCE(NULLIF(p.meta->>'stock_qty','')::int,
+               NULLIF(p.meta->>'stock','')::int, 0)               AS stock_qty,
+      COALESCE(NULLIF(p.meta->>'low_stock_threshold','')::int, 0) AS low_stock_threshold,
+      COALESCE(p.meta->>'sku','')                                 AS sku
+    FROM products p
+    ${whereSql}
+    ORDER BY p.id ASC
+    LIMIT $${pageParams.length - 1} OFFSET $${pageParams.length}
+    `,
+    pageParams
+  );
+
+  // Optional: attach nearest batch/expiry per product (if batches table exists)
+  let batchByProduct = new Map<number, { batch_no?: string | null; exp_date?: string | null }>();
+  if (rows.length > 0) {
+    try {
+      const client = await pool.connect();
+      try {
+        const tRes = await client.query(`
+          SELECT COALESCE(
+            (SELECT 'product_batches' WHERE to_regclass('public.product_batches') IS NOT NULL),
+            (SELECT 'batches'          WHERE to_regclass('public.batches') IS NOT NULL),
+            ''
+          ) AS t
+        `);
+        const table = (tRes.rows?.[0] as any)?.t || "";
+        if (table) {
+          const colsRes = await client.query(
+            `SELECT LOWER(column_name) AS col
+             FROM information_schema.columns
+             WHERE table_schema='public' AND table_name=$1`,
+            [table]
+          );
+          const cols = new Set<string>(colsRes.rows.map((r: any) => r.col));
+          const pick = (...candidates: string[]) => candidates.find((c) => cols.has(c));
+
+          const idCol = pick("id") || "id";
+          const productIdCol = pick("product_id") || "product_id";
+          const batchNoCol = pick("batch_no", "batch", "batch_code", "batchcode");
+          const expCol = pick("exp_date", "expiry_date", "expiration_date", "exp_dt", "expiry_on", "expire_on");
+
+          const ids = rows.map((r: any) => Number(r.id)).filter((n) => Number.isFinite(n));
+          if (ids.length) {
+            const sel = [
+              `b.${productIdCol} AS product_id`,
+              batchNoCol ? `b.${batchNoCol}::text AS batch_no` : `NULL::text AS batch_no`,
+              expCol ? `to_char(b.${expCol}, 'YYYY-MM-DD') AS exp_date` : `NULL::text AS exp_date`,
+            ].join(", ");
+            const orderBy = expCol
+              ? `b.${productIdCol}, b.${expCol} NULLS LAST, b.${idCol} DESC`
+              : `b.${productIdCol}, b.${idCol} DESC`;
+
+            const bRes = await client.query(
+              `
+              SELECT DISTINCT ON (b.${productIdCol})
+                ${sel}
+              FROM ${table} b
+              WHERE b.${productIdCol} = ANY($1::int[])
+              ORDER BY ${orderBy}
+              `,
+              [ids]
+            );
+
+            batchByProduct = new Map(
+              (bRes.rows || []).map((r: any) => [
+                Number(r.product_id),
+                { batch_no: r.batch_no ?? null, exp_date: r.exp_date ?? null },
+              ])
+            );
+          }
+        }
+      } finally {
+        client.release();
+      }
+    } catch {
+      // ignore batch lookup failures to keep /api/products resilient
+    }
+  }
+
+  const items = rows.map((r: any) => {
+    const b = batchByProduct.get(Number(r.id));
+    return {
+      ...r,
+      batch_no: b?.batch_no ?? null,
+      exp_date: b?.exp_date ?? null,
+    };
+  });
+
+  return NextResponse.json({
+    items,
+    total,
+    page,
+    perPage,
+    totalPages,
+  });
+}
+
+/* =========================
+   POST /api/products  (JSON)
+   Body fields are stored in meta; name is required.
+   Returns: { ok, item }
+========================= */
+export async function POST(req: Request) {
+  try {
+    const payload = await req.json().catch(() => ({} as any));
+
+    const name = String(payload.name ?? "").trim();
+    if (!name) {
+      return NextResponse.json({ ok: false, error: "Name is required" }, { status: 400 });
+    }
+
+    const meta = {
+      selling_price: Number(payload.selling_price ?? payload.price ?? 0) || 0,
+      gst_slab: Number(payload.gst_slab ?? 0) || 0,
+      stock_qty: Number(payload.stock_qty ?? payload.stock ?? 0) || 0,
+      low_stock_threshold: Number(payload.low_stock_threshold ?? 0) || 0,
+      sku: payload.sku != null ? String(payload.sku) : null,
+      brand: payload.brand != null ? String(payload.brand) : null,
+      hsn_code: payload.hsn_code != null ? String(payload.hsn_code) : null,
+      unit: payload.unit != null ? String(payload.unit) : null,
+      notes: payload.notes != null ? String(payload.notes) : null,
+    };
+
+    const { rows } = await pool.query(
+      `INSERT INTO products (name, meta)
+       VALUES ($1, $2::jsonb)
+       RETURNING id, name, meta`,
+      [name, JSON.stringify(meta)]
+    );
+
+    return NextResponse.json({ ok: true, item: rows[0] }, { status: 201 });
+  } catch (e: any) {
+    return NextResponse.json({ ok: false, error: e?.message || "Create failed" }, { status: 500 });
+  }
+}
