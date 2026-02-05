@@ -47,7 +47,10 @@ export async function POST(req: Request) {
     const del = await client.query(`DELETE FROM quotations WHERE id = ANY($1::int[])`, [ids]);
     await client.query("COMMIT");
 
-    return NextResponse.json({ deleted: del.rowCount ?? 0 });
+    const deleted =
+      (del as any)?.rowCount ??
+      (Array.isArray((del as any)?.rows) ? (del as any).rows.length : 0);
+    return NextResponse.json({ deleted });
   } catch (e: any) {
     await client.query("ROLLBACK");
     return new NextResponse(e?.message || "Delete failed", { status: 500 });
