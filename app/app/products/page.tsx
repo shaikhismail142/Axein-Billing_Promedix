@@ -32,9 +32,10 @@ type PageParams = {
   page?: string;
   perPage?: string;
   q?: string;
-  sort?: "id" | "name" | "sku" | "price" | "stock";
+  sort?: "id" | "name" | "sku" | "price" | "stock" | "category" | "expiry" | "least_bought";
   dir?: "asc" | "desc";
   low?: "1";
+  category?: string;
 };
 
 /* ---------- Utils ---------- */
@@ -78,12 +79,16 @@ async function fetchProducts(searchParams: PageParams): Promise<ProductsResponse
   const page = clamp(parseIntSafe(searchParams.page, 1), 1, 1_000_000);
   const perPage = clamp(parseIntSafe(searchParams.perPage, 20), 1, 200);
   const q = typeof searchParams.q === "string" ? searchParams.q.trim() : "";
+  const category = typeof searchParams.category === "string" ? searchParams.category.trim() : "";
   const sort = (typeof searchParams.sort === "string" ? searchParams.sort : "id") as
     | "id"
     | "name"
     | "sku"
     | "price"
-    | "stock";
+    | "stock"
+    | "category"
+    | "expiry"
+    | "least_bought";
   const dir = (typeof searchParams.dir === "string" ? searchParams.dir : "asc") as "asc" | "desc";
   const low = searchParams.low === "1" ? "1" : "";
 
@@ -94,6 +99,7 @@ async function fetchProducts(searchParams: PageParams): Promise<ProductsResponse
     dir,
   });
   if (q) qs.set("q", q);
+  if (category) qs.set("category", category);
   if (low) qs.set("low", low);
 
   const res = await fetch(`${buildBaseUrl()}/api/products?${qs}`, { cache: "no-store" });
@@ -102,6 +108,18 @@ async function fetchProducts(searchParams: PageParams): Promise<ProductsResponse
     throw new Error(`Products API failed (${res.status}): ${text || res.statusText}`);
   }
   return res.json();
+}
+
+async function fetchCategories(): Promise<string[]> {
+  try {
+    const res = await fetch(`${buildBaseUrl()}/api/categories`, { cache: "no-store" });
+    if (!res.ok) return [];
+    const data = await res.json();
+    const items = Array.isArray(data?.items) ? data.items : [];
+    return items.map((c: any) => String(c?.name || "").trim()).filter(Boolean);
+  } catch {
+    return [];
+  }
 }
 
 /* ---------- Small server components ---------- */
@@ -166,19 +184,24 @@ function PerPagePicker({ qs, value }: { qs: URLSearchParams; value: number }) {
 /* ---------- Page ---------- */
 export default async function ProductsPage({ searchParams }: { searchParams: PageParams }) {
   const q = typeof searchParams.q === "string" ? searchParams.q : "";
+  const category = typeof searchParams.category === "string" ? searchParams.category : "";
   const sort = (typeof searchParams.sort === "string" ? searchParams.sort : "id") as
     | "id"
     | "name"
     | "sku"
     | "price"
-    | "stock";
+    | "stock"
+    | "category"
+    | "expiry"
+    | "least_bought";
   const dir = (typeof searchParams.dir === "string" ? searchParams.dir : "asc") as "asc" | "desc";
   const lowOnly = searchParams.low === "1";
 
   let data: ProductsResponse | null = null;
   let errorMsg = "";
+  let categories: string[] = [];
   try {
-    data = await fetchProducts(searchParams);
+    [data, categories] = await Promise.all([fetchProducts(searchParams), fetchCategories()]);
   } catch (err: any) {
     errorMsg = err?.message || "Failed to load products";
   }
@@ -195,6 +218,7 @@ export default async function ProductsPage({ searchParams }: { searchParams: Pag
   baseQS.set("sort", sort);
   baseQS.set("dir", dir);
   if (q) baseQS.set("q", q);
+  if (category) baseQS.set("category", category);
   if (lowOnly) baseQS.set("low", "1");
 
   const makeURL = (p: number) => {
@@ -225,61 +249,101 @@ export default async function ProductsPage({ searchParams }: { searchParams: Pag
     return `/products?${sp.toString()}`;
   })();
 
-  const exportAllHref = `/api/products/export${q ? `?q=${encodeURIComponent(q)}` : ""}`;
+  const exportParams = new URLSearchParams();
+  if (q) exportParams.set("q", q);
+  if (category) exportParams.set("category", category);
+  if (lowOnly) exportParams.set("low", "1");
+  const exportAllHref = `/api/products/export${exportParams.size ? `?${exportParams.toString()}` : ""}`;
 
   return (
     <div className="p-6 space-y-4 max-w-6xl mx-auto">
       <SelectionProvider>
         {/* Title + actions */}
         <div className="flex items-center justify-between gap-3">
-          <h1 className="text-2xl font-semibold">Products</h1>
-
+          <div>
+            <h1 className="text-2xl font-semibold">Products</h1>
+            <p className="muted text-sm">Search by product, category, SKU, or HSN</p>
+          </div>
           <div className="flex items-center gap-2">
-            {/* Search */}
-            <form action="/products" className="flex items-center gap-2">
-              <input
-                name="q"
-                defaultValue={q}
-                placeholder="Search products…"
-                className="border rounded-lg px-3 py-2"
-              />
-              <input type="hidden" name="perPage" value={perPage} />
-              <input type="hidden" name="sort" value={sort} />
-              <input type="hidden" name="dir" value={dir} />
-              {lowOnly && <input type="hidden" name="low" value="1" />}
-              <button className="px-3 py-2 rounded-xl border" type="submit">
-                Search
-              </button>
-            </form>
-
-            {/* Low stock toggle */}
-            <Link
-              className={`px-3 py-2 rounded-xl border ${
-                lowOnly ? "bg-yellow-100 border-yellow-300" : ""
-              }`}
-              href={lowToggleHref}
-            >
-              {lowOnly ? "Showing Low-stock" : "Low-stock only"}
-            </Link>
-
-            {/* Per-page (link-based) */}
-            <div className="hidden sm:block">
-              <PerPagePicker qs={baseQS} value={perPage} />
-            </div>
-
-            {/* Export ALL filtered (BulkTray handles selected) */}
             <Link className="px-3 py-2 rounded-xl border" href={exportAllHref}>
               Export CSV
             </Link>
-
             <Link className="px-3 py-2 rounded-xl border" href="/products/import">
               Import CSV
             </Link>
-
-            <Link className="px-3 py-2 rounded-xl bg-blue-600 text-white" href="/products/new">
+            <Link className="btn btn-primary" href="/products/new">
               New Product
             </Link>
           </div>
+        </div>
+
+        {/* Filters */}
+        <div className="card" style={{ padding: 12 }}>
+          <form action="/products" className="flex flex-wrap items-end gap-2">
+            <div className="flex flex-col">
+              <label className="text-xs">Search</label>
+              <input
+                name="q"
+                defaultValue={q}
+                placeholder="Search by name or category…"
+                className="border rounded-lg px-3 py-2"
+              />
+            </div>
+
+            <div className="flex flex-col">
+              <label className="text-xs">Category</label>
+              <select name="category" defaultValue={category || ""} className="border rounded-lg px-3 py-2">
+                <option value="">All</option>
+                {categories.map((c) => (
+                  <option key={c} value={c}>{c}</option>
+                ))}
+              </select>
+            </div>
+
+            <div className="flex flex-col">
+              <label className="text-xs">Sort</label>
+              <select name="sort" defaultValue={sort} className="border rounded-lg px-3 py-2">
+                <option value="id">Newest</option>
+                <option value="name">Name</option>
+                <option value="category">Category</option>
+                <option value="price">Price</option>
+                <option value="stock">Stock</option>
+                <option value="expiry">Near Expiry</option>
+                <option value="least_bought">Least Bought</option>
+              </select>
+            </div>
+
+            <div className="flex flex-col">
+              <label className="text-xs">Direction</label>
+              <select name="dir" defaultValue={dir} className="border rounded-lg px-3 py-2">
+                <option value="asc">A → Z / Low → High</option>
+                <option value="desc">Z → A / High → Low</option>
+              </select>
+            </div>
+
+            <div className="flex items-center gap-2">
+              <input type="hidden" name="perPage" value={perPage} />
+              {lowOnly && <input type="hidden" name="low" value="1" />}
+              <button className="px-3 py-2 rounded-xl border" type="submit">
+                Apply
+              </button>
+              <Link className="glass-btn px-3 py-2 rounded-2xl" href="/products">
+                Clear Filters
+              </Link>
+            </div>
+
+            <div className="ml-auto flex items-center gap-2">
+              <Link
+                className={`px-3 py-2 rounded-xl border ${lowOnly ? "bg-yellow-100 border-yellow-300" : ""}`}
+                href={lowToggleHref}
+              >
+                {lowOnly ? "Showing Low-stock" : "Low-stock only"}
+              </Link>
+              <div className="hidden sm:block">
+                <PerPagePicker qs={baseQS} value={perPage} />
+              </div>
+            </div>
+          </form>
         </div>
 
         {/* Error */}
@@ -297,9 +361,9 @@ export default async function ProductsPage({ searchParams }: { searchParams: Pag
 
         {/* Table */}
         {!errorMsg && (
-          <div className="overflow-x-auto rounded-xl border">
-            <table className="min-w-full text-sm">
-              <thead className="bg-gray-50 sticky top-0 z-10">
+          <div className="table-wrap">
+            <table className="table">
+              <thead>
                 <tr>
                   <th className="px-3 py-2 w-10">
                     <MasterCheckbox pageIds={items.map((i) => i.id)} />
@@ -317,7 +381,7 @@ export default async function ProductsPage({ searchParams }: { searchParams: Pag
                   <th className="px-3 py-2 text-right">Actions</th>
                 </tr>
               </thead>
-              <tbody className="[&>tr:nth-child(even)]:bg-gray-50/40 dark:[&>tr:nth-child(even)]:bg-slate-800/40">
+              <tbody>
                 {items.map((p) => {
                   const mat = materialFromSku(p.sku);
                   const isLow = p.stock_qty <= p.low_stock_threshold && p.low_stock_threshold > 0;

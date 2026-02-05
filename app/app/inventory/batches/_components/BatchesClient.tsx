@@ -3,6 +3,7 @@
 
 import * as React from "react";
 import { useRouter } from "next/navigation";
+import Link from "next/link";
 import type { ApiResp, Batch } from "../page";
 
 type Props = {
@@ -26,6 +27,9 @@ export default function BatchesClient({ initialData, current }: Props) {
   const [selectAll, setSelectAll] = React.useState(false);
   const [busy, setBusy] = React.useState(false);
   const [msg, setMsg] = React.useState<string | null>(null);
+  const [q, setQ] = React.useState(current.q || "");
+  const [expiry, setExpiry] = React.useState<"all" | "near" | "expired">(current.expiry || "all");
+  const [onlyQty, setOnlyQty] = React.useState(current.onlyQty === "true");
 
   // Keep in sync if server reloads
   React.useEffect(() => {
@@ -34,6 +38,18 @@ export default function BatchesClient({ initialData, current }: Props) {
     setSelected({});
     setSelectAll(false);
   }, [initialData.items]);
+
+  const page = Number(current.page || "1");
+  const totalPages = Math.max(1, Math.ceil((initialData.total || 0) / (initialData.pageSize || 20)));
+
+  const pushQuery = (nextPage: number) => {
+    const qs = new URLSearchParams();
+    if (q) qs.set("q", q);
+    if (expiry) qs.set("expiry", expiry);
+    if (onlyQty) qs.set("onlyQty", "true");
+    qs.set("page", String(nextPage));
+    router.push(`/inventory/batches?${qs.toString()}`);
+  };
 
   const markDirty = (id: string, patch: Partial<Pick<Batch, "mfg_date" | "exp_date">>) => {
     setDirty((d) => ({ ...d, [id]: { ...d[id], ...patch } }));
@@ -153,7 +169,10 @@ export default function BatchesClient({ initialData, current }: Props) {
   return (
     <div className="p-4 space-y-4">
       <div className="flex items-center justify-between">
-        <h1 className="text-xl font-semibold">Batches</h1>
+        <div>
+          <h1 className="text-xl font-semibold">Batches / Lots</h1>
+          <div className="text-sm muted">Manage batch numbers, MFG and expiry dates.</div>
+        </div>
         <div className="flex items-center gap-2">
           <button
             className="px-3 py-2 rounded-2xl shadow-sm border"
@@ -166,15 +185,67 @@ export default function BatchesClient({ initialData, current }: Props) {
         </div>
       </div>
 
+      {/* Filters */}
+      <div className="card" style={{ padding: 12 }}>
+        <div className="flex flex-wrap items-end gap-3">
+          <div className="flex flex-col">
+            <label className="text-xs">Search</label>
+            <input
+              className="input"
+              placeholder="Product or batch…"
+              value={q}
+              onChange={(e) => setQ(e.target.value)}
+            />
+          </div>
+          <div className="flex flex-col">
+            <label className="text-xs">Expiry</label>
+            <select
+              className="input"
+              value={expiry}
+              onChange={(e) => setExpiry(e.target.value as any)}
+            >
+              <option value="all">All</option>
+              <option value="near">Near Expiry</option>
+              <option value="expired">Expired</option>
+            </select>
+          </div>
+          <label className="flex items-center gap-2 text-sm">
+            <input
+              type="checkbox"
+              checked={onlyQty}
+              onChange={(e) => setOnlyQty(e.target.checked)}
+            />
+            Only with quantity
+          </label>
+          <button className="btn" onClick={() => pushQuery(1)}>
+            Apply
+          </button>
+          <button
+            className="btn btn-outline"
+            onClick={() => {
+              setQ("");
+              setExpiry("all");
+              setOnlyQty(true);
+              router.push("/inventory/batches");
+            }}
+          >
+            Clear
+          </button>
+          <div className="ml-auto text-xs muted">
+            Near expiry window: {initialData.prefs?.near_expiry_days ?? 30} days
+          </div>
+        </div>
+      </div>
+
       {msg && (
         <div className="text-sm p-2 rounded border bg-neutral-50 dark:bg-neutral-900">
           {busy ? "Working… " : ""}{msg}
         </div>
       )}
 
-      <div className="overflow-auto rounded-2xl border">
-        <table className="min-w-full text-sm">
-          <thead className="bg-neutral-100 dark:bg-neutral-900">
+      <div className="table-wrap">
+        <table className="table">
+          <thead>
             <tr>
               <th className="p-2">
                 <input
@@ -196,7 +267,7 @@ export default function BatchesClient({ initialData, current }: Props) {
           <tbody>
             {rows.length === 0 && (
               <tr>
-                <td colSpan={9} className="p-4 text-center text-neutral-500">
+                <td colSpan={9} className="p-4 text-center muted">
                   No batches found.
                 </td>
               </tr>
@@ -215,7 +286,15 @@ export default function BatchesClient({ initialData, current }: Props) {
                       onChange={(e) => toggleRow(r.id, e.target.checked)}
                     />
                   </td>
-                  <td className="p-2">{r.product_name ?? "—"}</td>
+                  <td className="p-2">
+                    {r.product_id ? (
+                      <Link href={`/products/${r.product_id}/edit`} className="underline">
+                        {r.product_name ?? "—"}
+                      </Link>
+                    ) : (
+                      r.product_name ?? "—"
+                    )}
+                  </td>
                   <td className="p-2">{r.sku ?? "—"}</td>
                   <td className="p-2">{r.batch_no ?? "—"}</td>
                   <td className="p-2">
@@ -223,17 +302,17 @@ export default function BatchesClient({ initialData, current }: Props) {
                       type="date"
                       value={r.mfg_date ?? ""}
                       onChange={(e) => onDateChange(r.id, "mfg_date", e.target.value)}
-                      className={`px-2 py-1 rounded border bg-transparent w-[12ch] ${mfgDirty ? "ring-2 ring-amber-400" : ""}`}
-                    />
-                  </td>
-                  <td className="p-2">
-                    <input
-                      type="date"
-                      value={r.exp_date ?? ""}
-                      onChange={(e) => onDateChange(r.id, "exp_date", e.target.value)}
-                      className={`px-2 py-1 rounded border bg-transparent w-[12ch] ${expDirty ? "ring-2 ring-amber-400" : ""}`}
-                    />
-                  </td>
+                    className={`input w-[12ch] ${mfgDirty ? "ring-2 ring-amber-400" : ""}`}
+                  />
+                </td>
+                <td className="p-2">
+                  <input
+                    type="date"
+                    value={r.exp_date ?? ""}
+                    onChange={(e) => onDateChange(r.id, "exp_date", e.target.value)}
+                    className={`input w-[12ch] ${expDirty ? "ring-2 ring-amber-400" : ""}`}
+                  />
+                </td>
                   <td className="p-2 text-right">{r.qty}</td>
                   <td className="p-2 text-right">{r.days_left ?? "—"}</td>
                   <td className="p-2 text-right">
@@ -246,7 +325,7 @@ export default function BatchesClient({ initialData, current }: Props) {
                         Save
                       </button>
                     ) : (
-                      <span className="text-neutral-400">—</span>
+                      <span className="muted">—</span>
                     )}
                   </td>
                 </tr>
@@ -254,6 +333,21 @@ export default function BatchesClient({ initialData, current }: Props) {
             })}
           </tbody>
         </table>
+      </div>
+
+      {/* Pagination */}
+      <div className="flex items-center justify-between text-sm">
+        <div className="muted">
+          Page {page} of {totalPages} • {initialData.total} items
+        </div>
+        <div className="flex items-center gap-2">
+          <button className="btn" disabled={page <= 1} onClick={() => pushQuery(page - 1)}>
+            Prev
+          </button>
+          <button className="btn" disabled={page >= totalPages} onClick={() => pushQuery(page + 1)}>
+            Next
+          </button>
+        </div>
       </div>
 
       {/* Bulk actions */}
@@ -294,7 +388,7 @@ export default function BatchesClient({ initialData, current }: Props) {
         </button>
       </div>
 
-      <div className="text-xs text-neutral-500">
+      <div className="text-xs muted">
         Tip: “Apply to Selected” updates the table values and marks them dirty. Use “Save Selected” (or the row Save button) to persist.
       </div>
     </div>

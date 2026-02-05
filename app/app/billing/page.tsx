@@ -305,6 +305,7 @@ export default function Billing() {
                   <span>
                     {p.name} {p.sku ? `(${p.sku})` : ''}
                     {typeof p.stock_qty === 'number' ? ` • Stock: ${p.stock_qty}` : ''}
+                    {p.category ? ` • ${p.category}` : ''}
                   </span>
                   <b>{inr(Number((p.selling_price ?? p.price) || 0))}</b>
                 </div>

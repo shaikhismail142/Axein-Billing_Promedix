@@ -14,10 +14,25 @@ export const dynamic = 'force-dynamic';
 export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url);
   const q = (searchParams.get('q') || '').trim();
+  const page = Math.max(1, Number(searchParams.get('page') || 1));
+  const perPage = Math.min(200, Math.max(1, Number(searchParams.get('perPage') || 20)));
+  const offset = (page - 1) * perPage;
 
   const db = await getDb();
 
   try {
+    const countRes = await db.query(
+      `
+      SELECT COUNT(*)::int AS cnt
+      FROM quotations q
+      LEFT JOIN customers c ON c.id = q.customer_id
+      WHERE ($1 = '' OR c.name ILIKE '%'||$1||'%' OR q.quotation_number ILIKE '%'||$1||'%')
+      `,
+      [q]
+    );
+    const total = countRes.rows?.[0]?.cnt ?? 0;
+    const totalPages = Math.max(1, Math.ceil(total / perPage));
+
     const { rows } = await db.query(
       `
       with base as (
@@ -32,7 +47,7 @@ export async function GET(req: NextRequest) {
         left join customers c on c.id = q.customer_id
         where ($1 = '' or c.name ilike '%'||$1||'%' or q.quotation_number ilike '%'||$1||'%')
         order by q.quotation_date desc, q.id desc
-        limit 200
+        limit $2 offset $3
       )
       select
         b.id,
@@ -68,11 +83,11 @@ export async function GET(req: NextRequest) {
       group by b.id, b.quotation_number, b.quotation_date, b.valid_until, b.meta, b.customer_name
       order by b.quotation_date desc, b.id desc
       `,
-      [q]
+      [q, perPage, offset]
     );
 
     return NextResponse.json(
-      { ok: true, data: rows, count: rows.length },
+      { ok: true, data: rows, count: rows.length, total, page, perPage, totalPages },
       { status: 200, headers: { 'Cache-Control': 'no-store' } }
     );
   } catch (e) {

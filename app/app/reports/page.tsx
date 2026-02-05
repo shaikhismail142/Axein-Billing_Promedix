@@ -38,6 +38,10 @@ function cssVar(name: string, fallback: string) {
 export default function ReportsPage() {
   const [range, setRange] = useState<DateRange>({ from: ndaysAgoISO(30), to: todayISO() });
   const [deadDays, setDeadDays] = useState<number>(30);
+  const [deadPage, setDeadPage] = useState<number>(1);
+  const [deadPerPage] = useState<number>(50);
+  const [deadTotalPages, setDeadTotalPages] = useState<number>(1);
+  const [deadTotal, setDeadTotal] = useState<number>(0);
 
   const [deadStock, setDeadStock] = useState<DeadStockItem[]>([]);
   const [movers, setMovers] = useState<MoversItem[]>([]);
@@ -61,13 +65,22 @@ export default function ReportsPage() {
     try {
       const qs = `from=${range.from}&to=${range.to}`;
       const [ds, mv, re, lt] = await Promise.all([
-        fetch(`/api/reports/dead-stock?days=${deadDays}`).then(r => r.json()),
+        fetch(`/api/reports/dead-stock?days=${deadDays}&page=${deadPage}&perPage=${deadPerPage}`).then(r => r.json()),
         fetch(`/api/reports/movers?${qs}`).then(r => r.json()),
         fetch(`/api/reports/customers/retention?${qs}`).then(r => r.json()),
         fetch(`/api/reports/low-stock-trends?${qs}`).then(r => r.json()),
       ]);
       setDeadStock(Array.isArray(ds?.items) ? ds.items : []);
-      setMovers(Array.isArray(mv?.items) ? mv.items : []);
+      setDeadTotalPages(Number(ds?.totalPages || 1));
+      setDeadTotal(Number(ds?.total || 0));
+      const mvItems = Array.isArray(mv?.items)
+        ? mv.items.map((it: any) => ({
+            ...it,
+            qty: Number(it.qty || 0),
+            revenue: Number(it.revenue || 0),
+          }))
+        : [];
+      setMovers(mvItems);
       setRetention(re ?? null);
       setLowTrend(Array.isArray(lt?.items) ? lt.items : []);
     } catch (e) {
@@ -76,7 +89,11 @@ export default function ReportsPage() {
     } finally {
       setBusy(false);
     }
-  }, [range.from, range.to, deadDays]);
+  }, [range.from, range.to, deadDays, deadPage, deadPerPage]);
+
+  useEffect(() => {
+    setDeadPage(1);
+  }, [deadDays]);
 
   // Single effect, correctly depends on loadAll
   useEffect(() => { loadAll(); }, [loadAll]);
@@ -91,8 +108,8 @@ export default function ReportsPage() {
   );
 
   const totals = useMemo(() => {
-    const totalQty = movers.reduce((a, b) => a + b.qty, 0);
-    const totalRevenue = movers.reduce((a, b) => a + b.revenue, 0);
+    const totalQty = movers.reduce((a, b) => a + Number(b.qty || 0), 0);
+    const totalRevenue = movers.reduce((a, b) => a + Number(b.revenue || 0), 0);
     const deadCount = deadStock.length;
     const rep = retention?.repeat_count || 0;
     const neu = retention?.new_count || 0;
@@ -262,6 +279,27 @@ export default function ReportsPage() {
                 )}
               </tbody>
             </table>
+          </div>
+          <div className="mt-3 flex items-center justify-between text-sm">
+            <div className="muted">
+              Page {deadPage} of {deadTotalPages} • {deadTotal} items
+            </div>
+            <div className="flex items-center gap-2">
+              <button
+                className="btn"
+                onClick={() => setDeadPage((p) => Math.max(1, p - 1))}
+                disabled={deadPage <= 1}
+              >
+                Prev
+              </button>
+              <button
+                className="btn"
+                onClick={() => setDeadPage((p) => Math.min(deadTotalPages, p + 1))}
+                disabled={deadPage >= deadTotalPages}
+              >
+                Next
+              </button>
+            </div>
           </div>
         </div>
 

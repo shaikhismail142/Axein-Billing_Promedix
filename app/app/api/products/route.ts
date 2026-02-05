@@ -13,6 +13,10 @@ export async function GET(req: Request) {
   const page = Math.max(1, Number(url.searchParams.get("page") || 1));
   const perPage = Math.min(200, Math.max(1, Number(url.searchParams.get("perPage") || 20)));
   const q = (url.searchParams.get("q") || "").trim();
+  const sort = (url.searchParams.get("sort") || "id").toString();
+  const dir = (url.searchParams.get("dir") || "asc").toString().toLowerCase() === "desc" ? "desc" : "asc";
+  const category = (url.searchParams.get("category") || "").trim();
+  const lowOnly = (url.searchParams.get("low") || "").trim() === "1";
 
   // Build WHERE (name or meta->>'sku')
   const where: string[] = [];
@@ -20,7 +24,23 @@ export async function GET(req: Request) {
   if (q) {
     params.push(`%${q}%`);
     const i = params.length;
-    where.push(`(p.name ILIKE $${i} OR (p.meta->>'sku') ILIKE $${i})`);
+    where.push(`(
+      p.name ILIKE $${i}
+      OR (p.meta->>'sku') ILIKE $${i}
+      OR COALESCE(NULLIF(p.category,''), NULLIF(p.meta->>'category','')) ILIKE $${i}
+      OR COALESCE(p.hsn_code, p.hsn, p.meta->>'hsn_code') ILIKE $${i}
+    )`);
+  }
+  if (category) {
+    params.push(category);
+    const i = params.length;
+    where.push(`COALESCE(NULLIF(p.category,''), NULLIF(p.meta->>'category','')) = $${i}`);
+  }
+  if (lowOnly) {
+    where.push(
+      `COALESCE(NULLIF(p.meta->>'stock_qty','')::int, NULLIF(p.meta->>'stock','')::int, 0)
+       <= COALESCE(NULLIF(p.meta->>'low_stock_threshold','')::int, 0)`
+    );
   }
   const whereSql = where.length ? `WHERE ${where.join(" AND ")}` : "";
 
@@ -35,30 +55,127 @@ export async function GET(req: Request) {
 
   // Page
   const pageParams = [...params, perPage, offset];
-  const { rows } = await pool.query(
-    `
-    SELECT
-      p.id,
-      p.name,
-      COALESCE(p.category, p.meta->>'category')                   AS category,
-      COALESCE(p.hsn_code, p.hsn, p.meta->>'hsn_code')            AS hsn_code,
-      COALESCE(NULLIF(p.meta->>'selling_price','')::numeric,
-               NULLIF(p.meta->>'price','')::numeric, 0)           AS price,
-      COALESCE(NULLIF(p.meta->>'stock_qty','')::int,
-               NULLIF(p.meta->>'stock','')::int, 0)               AS stock_qty,
-      COALESCE(NULLIF(p.meta->>'low_stock_threshold','')::int, 0) AS low_stock_threshold,
-      COALESCE(p.meta->>'sku','')                                 AS sku
-    FROM products p
-    ${whereSql}
-    ORDER BY p.id ASC
-    LIMIT $${pageParams.length - 1} OFFSET $${pageParams.length}
-    `,
-    pageParams
-  );
+  // Optional: read batch table metadata (for expiry sort)
+  let batchTable = "";
+  let batchCols = new Set<string>();
+  if (sort === "expiry") {
+    try {
+      const tRes = await pool.query(`
+        SELECT COALESCE(
+          (SELECT 'product_batches' WHERE to_regclass('public.product_batches') IS NOT NULL),
+          (SELECT 'batches'          WHERE to_regclass('public.batches') IS NOT NULL),
+          ''
+        ) AS t
+      `);
+      batchTable = (tRes.rows?.[0] as any)?.t || "";
+      if (batchTable) {
+        const colsRes = await pool.query(
+          `SELECT LOWER(column_name) AS col
+           FROM information_schema.columns
+           WHERE table_schema='public' AND table_name=$1`,
+          [batchTable]
+        );
+        batchCols = new Set<string>(colsRes.rows.map((r: any) => r.col));
+      }
+    } catch {
+      batchTable = "";
+    }
+  }
+
+  const categoryExpr = `COALESCE(NULLIF(p.category,''), NULLIF(p.meta->>'category',''))`;
+  const priceExpr = `COALESCE(NULLIF(p.meta->>'selling_price','')::numeric,
+                               NULLIF(p.meta->>'price','')::numeric, 0)`;
+  const stockExpr = `COALESCE(NULLIF(p.meta->>'stock_qty','')::int,
+                               NULLIF(p.meta->>'stock','')::int, 0)`;
+  const skuExpr = `COALESCE(p.meta->>'sku','')`;
+
+  let orderBy = `p.id ${dir}`;
+  let joinSql = "";
+  let selectExtras = "";
+  if (sort === "name") orderBy = `p.name ${dir}`;
+  if (sort === "sku") orderBy = `${skuExpr} ${dir} NULLS LAST`;
+  if (sort === "price") orderBy = `${priceExpr} ${dir}`;
+  if (sort === "stock") orderBy = `${stockExpr} ${dir}`;
+  if (sort === "category") orderBy = `${categoryExpr} ${dir} NULLS LAST`;
+  if (sort === "least_bought") {
+    joinSql = `
+      LEFT JOIN (
+        SELECT product_id, COALESCE(SUM(qty),0) AS qty_sold
+        FROM sale_items
+        WHERE product_id IS NOT NULL
+        GROUP BY product_id
+      ) sa ON sa.product_id = p.id
+    `;
+    selectExtras = ", COALESCE(sa.qty_sold,0) AS qty_sold";
+    orderBy = `COALESCE(sa.qty_sold,0) ${dir}, p.name ASC`;
+  }
+
+  let rows: any[] = [];
+  if (sort === "expiry" && batchTable && batchCols.size) {
+    const pick = (...candidates: string[]) => candidates.find((c) => batchCols.has(c));
+    const productIdCol = pick("product_id") || "product_id";
+    const batchNoCol = pick("batch_no", "batch", "batch_code", "batchcode");
+    const expCol = pick("exp_date", "expiry_date", "expiration_date", "exp_dt", "expiry_on", "expire_on");
+
+    if (expCol) {
+      const select = `
+        SELECT
+          p.id,
+          p.name,
+          ${categoryExpr} AS category,
+          COALESCE(p.hsn_code, p.hsn, p.meta->>'hsn_code') AS hsn_code,
+          ${priceExpr} AS price,
+          ${stockExpr} AS stock_qty,
+          COALESCE(NULLIF(p.meta->>'low_stock_threshold','')::int, 0) AS low_stock_threshold,
+          ${skuExpr} AS sku,
+          bmin.batch_no,
+          bmin.exp_date
+        FROM products p
+        LEFT JOIN LATERAL (
+          SELECT
+            ${batchNoCol ? `b.${batchNoCol}::text` : "NULL::text"} AS batch_no,
+            b.${expCol}::date AS exp_date
+          FROM ${batchTable} b
+          WHERE b.${productIdCol} = p.id
+          ORDER BY b.${expCol} ${dir} NULLS LAST
+          LIMIT 1
+        ) bmin ON true
+        ${whereSql}
+        ORDER BY bmin.exp_date ${dir} NULLS LAST, p.name ASC
+        LIMIT $${pageParams.length - 1} OFFSET $${pageParams.length}
+      `;
+      const r = await pool.query(select, pageParams);
+      rows = r.rows;
+    }
+  }
+
+  if (!rows.length) {
+    const { rows: r } = await pool.query(
+      `
+      SELECT
+        p.id,
+        p.name,
+        ${categoryExpr}                                   AS category,
+        COALESCE(p.hsn_code, p.hsn, p.meta->>'hsn_code')  AS hsn_code,
+        ${priceExpr}                                      AS price,
+        ${stockExpr}                                      AS stock_qty,
+        COALESCE(NULLIF(p.meta->>'low_stock_threshold','')::int, 0) AS low_stock_threshold,
+        ${skuExpr}                                        AS sku
+        ${selectExtras}
+      FROM products p
+      ${joinSql}
+      ${whereSql}
+      ORDER BY ${orderBy}
+      LIMIT $${pageParams.length - 1} OFFSET $${pageParams.length}
+      `,
+      pageParams
+    );
+    rows = r;
+  }
 
   // Optional: attach nearest batch/expiry per product (if batches table exists)
   let batchByProduct = new Map<number, { batch_no?: string | null; exp_date?: string | null }>();
-  if (rows.length > 0) {
+  if (rows.length > 0 && !rows[0]?.exp_date) {
     try {
       const client = await pool.connect();
       try {
