@@ -49,7 +49,7 @@ export async function GET(req: Request) {
       p.id,
       p.name,
       (p.meta->>'sku') AS sku,
-      COALESCE(NULLIF(p.category,''), NULLIF(p.meta->>'category','')) AS category,
+      COALESCE(NULLIF(p.meta->>'category',''), NULLIF(p.category,'')) AS category,
       COALESCE(p.hsn_code, p.hsn, p.meta->>'hsn_code') AS hsn_code,
       COALESCE((p.meta->>'price')::numeric, 0) AS price,
       COALESCE((p.meta->>'stock_qty')::int, 0) AS stock_qty,

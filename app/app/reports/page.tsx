@@ -12,8 +12,6 @@ const YAxis               = dynamic(() => import('recharts').then(m => m.YAxis),
 const Tooltip             = dynamic(() => import('recharts').then(m => m.Tooltip),             { ssr: false });
 // ✅ Fix Legend: return { default: m.Legend } to match next/dynamic expectations
 const Legend              = dynamic(() => import('recharts').then(m => ({ default: m.Legend as any })), { ssr: false });
-const PieChart            = dynamic(() => import('recharts').then(m => m.PieChart),            { ssr: false });
-const Pie                 = dynamic(() => import('recharts').then(m => m.Pie),                 { ssr: false });
 const LineChart           = dynamic(() => import('recharts').then(m => m.LineChart),           { ssr: false });
 const Line                = dynamic(() => import('recharts').then(m => m.Line),                { ssr: false });
 const CartesianGrid       = dynamic(() => import('recharts').then(m => m.CartesianGrid),       { ssr: false });
@@ -213,24 +211,37 @@ export default function ReportsPage() {
 
           <div className="card" style={{ padding:12 }}>
             <h3 style={{ marginTop:0 }}>Repeat vs New Customers</h3>
-            <div style={{ width:'100%', height:300 }}>
-              <ResponsiveContainer>
-                <PieChart>
-                  <Pie
-                    data={[
-                      { name: 'Repeat', value: retention?.repeat_count || 0 },
-                      { name: 'New', value: retention?.new_count || 0 },
-                    ]}
-                    dataKey="value"
-                    nameKey="name"
-                    outerRadius={120}
-                    label
-                    fill={theme.primary}
-                  />
-                  <Tooltip />
-                </PieChart>
-              </ResponsiveContainer>
-            </div>
+            {(() => {
+              const rep = retention?.repeat_count || 0;
+              const neu = retention?.new_count || 0;
+              const total = rep + neu || 1;
+              const repPct = Math.round((rep / total) * 100);
+              const neuPct = 100 - repPct;
+              return (
+                <div>
+                  <div className="flex items-center justify-between text-sm">
+                    <span className="muted">Repeat</span>
+                    <span><b>{rep}</b> ({repPct}%)</span>
+                  </div>
+                  <div className="flex items-center justify-between text-sm mt-2">
+                    <span className="muted">New</span>
+                    <span><b>{neu}</b> ({neuPct}%)</span>
+                  </div>
+                  <div className="glass" style={{ height: 12, borderRadius: 999, overflow: 'hidden', marginTop: 10 }}>
+                    <div
+                      style={{
+                        width: `${repPct}%`,
+                        height: '100%',
+                        background: `linear-gradient(90deg, ${theme.primary}, ${theme.success})`,
+                      }}
+                    />
+                  </div>
+                  <div className="muted text-xs mt-2">
+                    Retention rate: <b>{repPct}%</b> of customers in this range are repeat buyers.
+                  </div>
+                </div>
+              );
+            })()}
           </div>
 
           <div className="card" style={{ padding:12 }}>

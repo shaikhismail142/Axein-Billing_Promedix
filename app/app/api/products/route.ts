@@ -94,7 +94,7 @@ export async function GET(req: Request) {
     }
   }
 
-  const categoryExpr = `COALESCE(NULLIF(p.category,''), NULLIF(p.meta->>'category',''))`;
+  const categoryExpr = `COALESCE(NULLIF(p.meta->>'category',''), NULLIF(p.category,''))`;
   const priceExpr = `COALESCE(NULLIF(p.meta->>'selling_price','')::numeric,
                                NULLIF(p.meta->>'price','')::numeric, 0)`;
   const stockExpr = `COALESCE(NULLIF(p.meta->>'stock_qty','')::int,

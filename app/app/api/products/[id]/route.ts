@@ -67,7 +67,7 @@ export async function GET(_req: Request, { params }: { params: { id: string } })
     ok: true,
     id: row.id,
     name: row.name,
-    category: s((row as any).category) ?? s(m.category),
+    category: s(m.category) ?? s((row as any).category),
     selling_price: n(m.selling_price ?? m.price) ?? 0,
     gst_slab: n(m.gst_slab) ?? 0,
     stock_qty: n(m.stock_qty ?? m.stock) ?? 0,
