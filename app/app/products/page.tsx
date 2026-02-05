@@ -4,6 +4,7 @@ import { headers } from "next/headers";
 import { SelectionProvider } from "./_components/selection";
 import { MasterCheckbox, RowCheckbox } from "./_components/checks";
 import BulkTray from "./_components/BulkTray";
+import AddCategoryButton from "./_components/AddCategoryButton";
 
 /* ---------- Types ---------- */
 type Product = {
@@ -286,6 +287,7 @@ export default async function ProductsPage({ searchParams }: { searchParams: Pag
             <Link className="px-3 py-2 rounded-xl border" href="/products/import">
               Import CSV
             </Link>
+            <AddCategoryButton />
             <Link className="btn btn-primary" href="/products/new">
               New Product
             </Link>
@@ -401,6 +403,7 @@ export default async function ProductsPage({ searchParams }: { searchParams: Pag
                 {items.map((p) => {
                   const mat = materialFromSku(p.sku);
                   const isLow = p.stock_qty <= p.low_stock_threshold && p.low_stock_threshold > 0;
+                  const formId = `row-${p.id}`;
                   return (
                     <tr key={p.id} className="border-t">
                       <td className="px-3 py-2 align-middle">
@@ -416,22 +419,47 @@ export default async function ProductsPage({ searchParams }: { searchParams: Pag
                           </span>
                         )}
                       </td>
-                      <td className="px-3 py-2">{p.category ?? "—"}</td>
+                      <td className="px-3 py-2">
+                        <select
+                          name="category"
+                          defaultValue={p.category ?? ""}
+                          form={formId}
+                          className="input"
+                        >
+                          <option value="">—</option>
+                          {categories.map((c) => (
+                            <option key={c} value={c}>{c}</option>
+                          ))}
+                        </select>
+                      </td>
                       <td className="px-3 py-2">{p.hsn_code ?? "—"}</td>
                       <td className="px-3 py-2">{p.batch_no ?? "—"}</td>
                       <td className="px-3 py-2">
                         {p.exp_date ? new Date(p.exp_date).toLocaleDateString("en-IN") : "—"}
                       </td>
-                      <td className="px-3 py-2">{inr.format(Number(p.price) || 0)}</td>
+                      <td className="px-3 py-2">
+                        <input
+                          name="selling_price"
+                          type="number"
+                          step="0.01"
+                          defaultValue={Number(p.price) || 0}
+                          form={formId}
+                          className="input"
+                          style={{ width: 120, textAlign: "right" }}
+                        />
+                      </td>
                       <td className="px-3 py-2">{p.stock_qty}</td>
                       <td className={`px-3 py-2 ${isLow ? "text-red-600 font-semibold" : ""}`}>
                         {p.low_stock_threshold}
                       </td>
                       <td className="px-3 py-2">{fmtUpdated(p.updated_at)}</td>
                       <td className="px-3 py-2 text-right">
-                        <Link className="px-2 py-1 rounded-lg border" href={`/products/${p.id}/edit`}>
-                          Edit
-                        </Link>
+                        <form id={formId} method="post" action={`/api/products/${p.id}`} className="inline-flex items-center gap-2">
+                          <input type="hidden" name="_method" value="PATCH" />
+                          <input type="hidden" name="return_to" value="/products" />
+                          <button className="btn-outline" type="submit">Save</button>
+                          <Link className="px-2 py-1 rounded-lg border" href={`/products/${p.id}/edit`}>Edit</Link>
+                        </form>
                       </td>
                     </tr>
                   );

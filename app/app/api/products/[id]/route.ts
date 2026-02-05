@@ -169,8 +169,20 @@ export async function POST(req: Request, ctx: { params: { id: string } }) {
   if (stock !== undefined) patch.stock_qty = stock;
   const price = n(form.get("selling_price") ?? form.get("price"));
   if (price !== undefined) patch.selling_price = price;
+  const category = s(form.get("category"));
+  if (category !== undefined) patch.category = category;
+  const expDate = s(form.get("exp_date") ?? form.get("expiry_date"));
+  if (expDate !== undefined) patch.exp_date = expDate;
 
-  const updated = await writeMeta(id, patch);
+  const updated = await writeMeta(id, patch, { name: s(form.get("name")) });
   if (!updated) return NextResponse.json({ ok: false, error: "not found" }, { status: 404 });
-  return NextResponse.redirect(new URL("/inventory/low-stock", req.url), { status: 303 });
+
+  if (category !== undefined) {
+    try {
+      await pool.query(`UPDATE products SET category=$2 WHERE id=$1`, [id, category]);
+    } catch {}
+  }
+  const returnTo = s(form.get("return_to"));
+  const safeReturn = returnTo && returnTo.startsWith("/") ? returnTo : "/inventory/low-stock";
+  return NextResponse.redirect(new URL(safeReturn, req.url), { status: 303 });
 }

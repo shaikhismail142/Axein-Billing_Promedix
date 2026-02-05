@@ -10,8 +10,28 @@ function inr(n: number) {
   return `INR (Rs/-) ${Number(n || 0).toFixed(2)}`;
 }
 
-export default async function InventoryPage() {
-  const rs = await pool.query(`SELECT id, name, meta FROM products ORDER BY name ASC`);
+export default async function InventoryPage({ searchParams }: { searchParams: { q?: string; page?: string } }) {
+  const q = (searchParams?.q || "").trim();
+  const page = Math.max(1, Number(searchParams?.page || 1));
+  const perPage = 20;
+  const offset = (page - 1) * perPage;
+
+  const where: string[] = [];
+  const params: any[] = [];
+  if (q) {
+    params.push(`%${q}%`);
+    where.push(`(p.name ILIKE $${params.length} OR (p.meta->>'sku') ILIKE $${params.length})`);
+  }
+  const whereSql = where.length ? `WHERE ${where.join(" AND ")}` : "";
+
+  const countRes = await pool.query(`SELECT COUNT(*)::int AS cnt FROM products p ${whereSql}`, params);
+  const total = countRes.rows?.[0]?.cnt ?? 0;
+  const totalPages = Math.max(1, Math.ceil(total / perPage));
+
+  const rs = await pool.query(
+    `SELECT id, name, meta FROM products p ${whereSql} ORDER BY name ASC LIMIT $${params.length + 1} OFFSET $${params.length + 2}`,
+    [...params, perPage, offset]
+  );
   const list = (rs.rows as Row[]).map((p) => {
     const m = p.meta || {};
     return {
@@ -28,8 +48,25 @@ export default async function InventoryPage() {
       <div className="card" style={{ padding: 16 }}>
         <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between' }}>
           <h1 style={{ margin: 0 }}>Inventory</h1>
-          <span className="muted" style={{ fontSize: 12 }}>{list.length} products</span>
+          <span className="muted" style={{ fontSize: 12 }}>{total} products</span>
         </div>
+
+        {/* Search */}
+        <form method="get" action="/inventory/low-stock" className="no-print mt-3">
+          <div className="flex gap-2">
+            <input
+              type="text"
+              name="q"
+              defaultValue={q}
+              placeholder="Search by name or SKU…"
+              className="w-[320px]"
+            />
+            <button className="btn-outline px-3 py-2">Search</button>
+            {q && (
+              <a href="/inventory/low-stock" className="glass-btn px-3 py-2 rounded-2xl">Clear</a>
+            )}
+          </div>
+        </form>
 
         <div className="table-wrap" style={{ marginTop: 12 }}>
           <table className="table">
@@ -38,8 +75,7 @@ export default async function InventoryPage() {
                 <th style={{ width: 60 }}>ID</th>
                 <th>Name</th>
                 <th style={{ width: 140, textAlign: 'right' }}>Price</th>
-                <th style={{ width: 160, textAlign: 'right' }}>Stock</th>
-                <th style={{ width: 200, textAlign: 'right' }}>Low Stock Threshold</th>
+                <th style={{ width: 220, textAlign: 'right' }}>Stock / Low Threshold</th>
                 <th style={{ width: 120 }} />
               </tr>
             </thead>
@@ -50,19 +86,14 @@ export default async function InventoryPage() {
                   <td style={{ maxWidth: 420, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{p.name}</td>
                   <td style={{ textAlign: 'right' }}>{inr(p.price)}</td>
                   <td style={{ textAlign: 'right' }}>
-                    <InlineStockEdit id={p.id} initial={p.stock} />
+                    <InlineStockLowEdit id={p.id} stock={p.stock} low={p.low} />
                   </td>
-                  <td style={{ textAlign: 'right' }}>
-                    <InlineLowEdit id={p.id} initial={p.low} />
-                  </td>
-                  <td style={{ textAlign: 'right' }}>
-                    <button className="btn-outline">Actions</button>
-                  </td>
+                  <td style={{ textAlign: 'right' }} />
                 </tr>
               ))}
               {list.length === 0 && (
                 <tr>
-                  <td colSpan={6} className="muted" style={{ textAlign: 'center', padding: 16 }}>
+                  <td colSpan={5} className="muted" style={{ textAlign: 'center', padding: 16 }}>
                     No products found.
                   </td>
                 </tr>
@@ -70,12 +101,33 @@ export default async function InventoryPage() {
             </tbody>
           </table>
         </div>
+
+        {/* Pagination */}
+        <div className="mt-3 flex items-center justify-between text-sm">
+          <div className="muted">
+            Page {page} of {totalPages} • {total} results
+          </div>
+          <div className="flex items-center gap-2">
+            <a
+              className={`px-3 py-2 rounded-xl border ${page <= 1 ? "pointer-events-none opacity-50" : ""}`}
+              href={`/inventory/low-stock?${new URLSearchParams({ q, page: String(page - 1) }).toString()}`}
+            >
+              Prev
+            </a>
+            <a
+              className={`px-3 py-2 rounded-xl border ${page >= totalPages ? "pointer-events-none opacity-50" : ""}`}
+              href={`/inventory/low-stock?${new URLSearchParams({ q, page: String(page + 1) }).toString()}`}
+            >
+              Next
+            </a>
+          </div>
+        </div>
       </div>
     </div>
   );
 }
 
-function InlineLowEdit({ id, initial }: { id: number; initial: number }) {
+function InlineStockLowEdit({ id, stock, low }: { id: number; stock: number; low: number }) {
   return (
     <form
       action={`/api/products/${id}`}
@@ -83,30 +135,18 @@ function InlineLowEdit({ id, initial }: { id: number; initial: number }) {
       style={{ display: 'inline-flex', gap: 6, justifyContent: 'flex-end', width: '100%' }}
     >
       <input type="hidden" name="_method" value="PATCH" />
-      <input
-        type="number"
-        name="low_stock_threshold"
-        defaultValue={initial}
-        min={0}
-        style={{ width: 110, textAlign: 'right' }}
-      />
-      <button type="submit" className="btn-outline">Save</button>
-    </form>
-  );
-}
-
-function InlineStockEdit({ id, initial }: { id: number; initial: number }) {
-  return (
-    <form
-      action={`/api/products/${id}`}
-      method="post"
-      style={{ display: 'inline-flex', gap: 6, justifyContent: 'flex-end', width: '100%' }}
-    >
-      <input type="hidden" name="_method" value="PATCH" />
+      <input type="hidden" name="return_to" value="/inventory/low-stock" />
       <input
         type="number"
         name="stock_qty"
-        defaultValue={initial}
+        defaultValue={stock}
+        min={0}
+        style={{ width: 110, textAlign: 'right' }}
+      />
+      <input
+        type="number"
+        name="low_stock_threshold"
+        defaultValue={low}
         min={0}
         style={{ width: 110, textAlign: 'right' }}
       />

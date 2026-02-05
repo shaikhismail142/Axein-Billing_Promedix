@@ -47,9 +47,14 @@ export async function GET() {
 export async function POST(req: Request) {
   try {
     const { name } = await req.json();
+    const n = String(name || "").trim();
+    if (!n) return NextResponse.json({ error: "Name required" }, { status: 400 });
     try {
-      const { rows } = await pool.query("INSERT INTO categories(name) VALUES($1) RETURNING id", [name]);
-      return NextResponse.json({ id: rows[0].id }, { status: 201 });
+      const { rows } = await pool.query(
+        "INSERT INTO categories(name) VALUES($1) ON CONFLICT (name) DO NOTHING RETURNING id",
+        [n]
+      );
+      return NextResponse.json({ id: rows?.[0]?.id ?? null, ok: true }, { status: 201 });
     } catch {
       // If categories table doesn't exist, silently succeed
       return NextResponse.json({ ok: true }, { status: 200 });
