@@ -2,5 +2,5 @@ services:
   web:
     build:
       context: ./app
-      dockerfile: ./app/Dockerfile
+      dockerfile: Dockerfile
     image: axein-web:local
