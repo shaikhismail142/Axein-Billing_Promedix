@@ -43,18 +43,18 @@ export default function AppHeader() {
       {/* Glass tile wrapper */}
       <div className="mx-auto max-w-screen-2xl px-3 sm:px-4">
         <div className="ax-header mt-3">
-          <div className="ax-header-inner flex h-14 items-center gap-3 px-3 sm:px-4">
+          <div className="ax-header-inner flex h-16 items-center gap-3 px-3 sm:px-4">
             {/* Brand */}
-            <Link href="/" className="flex items-center gap-2 font-semibold tracking-tight">
+            <Link href="/" className="flex items-center gap-2 font-semibold tracking-tight text-[15px]">
               <span className="ax-brand-badge">
                 AB
               </span>
-              <span>AxEin</span>
-              <span className="opacity-60">Billing</span>
+              <span className="text-[16px] font-semibold">AxEin</span>
+              <span className="text-[12px] uppercase tracking-[0.22em] opacity-60">Billing</span>
             </Link>
 
             {/* Desktop Nav (glassy buttons) */}
-            <nav className="ml-4 hidden items-center gap-2 md:flex" aria-label="Primary">
+            <nav className="ml-6 hidden items-center gap-2 md:flex" aria-label="Primary">
               <NavLink href="/" label="Dashboard" exact />
               <NavLink href="/inventory" label="Inventory" />
               <NavLink href="/invoices" label="Invoices" />

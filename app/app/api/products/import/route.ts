@@ -69,8 +69,10 @@ type MetaPatch = {
   sku?: string;
   brand?: string;
   hsn_code?: string;
+  category?: string;
   unit?: string;
   notes?: string;
+  exp_date?: string;
 };
 
 async function fetchByName(name: string) {
@@ -82,17 +84,34 @@ async function fetchByName(name: string) {
 }
 
 async function insertProduct(name: string, meta: Record<string, any>) {
-  await pool.query(
-    `INSERT INTO products (name, meta) VALUES ($1, $2::jsonb)`,
-    [name, JSON.stringify(meta)]
-  );
+  const category = meta.category ?? null;
+  try {
+    await pool.query(
+      `INSERT INTO products (name, category, meta) VALUES ($1, $2, $3::jsonb)`,
+      [name, category, JSON.stringify(meta)]
+    );
+  } catch {
+    await pool.query(
+      `INSERT INTO products (name, meta) VALUES ($1, $2::jsonb)`,
+      [name, JSON.stringify(meta)]
+    );
+  }
 }
 
 async function updateProductMeta(id: number, patch: Record<string, any>) {
   const rs = await pool.query(`SELECT meta FROM products WHERE id=$1`, [id]);
   if (rs.rowCount === 0) return;
   const merged = { ...(rs.rows[0].meta || {}), ...patch };
-  await pool.query(`UPDATE products SET meta=$2::jsonb WHERE id=$1`, [id, JSON.stringify(merged)]);
+  try {
+    await pool.query(`UPDATE products SET meta=$2::jsonb, updated_at=now() WHERE id=$1`, [id, JSON.stringify(merged)]);
+  } catch {
+    await pool.query(`UPDATE products SET meta=$2::jsonb WHERE id=$1`, [id, JSON.stringify(merged)]);
+  }
+  if (patch.category !== undefined) {
+    try {
+      await pool.query(`UPDATE products SET category=$2 WHERE id=$1`, [id, patch.category]);
+    } catch {}
+  }
 }
 
 export async function POST(req: Request) {
@@ -134,8 +153,10 @@ export async function POST(req: Request) {
     const iSku = idx("sku");
     const iBrand = idx("brand");
     const iHsn = idx("hsn_code");
+    const iCategory = idx("category");
     const iUnit = idx("unit");
     const iNotes = idx("notes");
+    const iExp = idx("exp_date") !== -1 ? idx("exp_date") : idx("expiry_date");
 
     let created = 0, updated = 0, skipped = 0;
 
@@ -164,8 +185,10 @@ export async function POST(req: Request) {
       const sku = str(row[iSku]); if (sku !== undefined) patch.sku = sku;
       const brand = str(row[iBrand]); if (brand !== undefined) patch.brand = brand;
       const hsn = str(row[iHsn]); if (hsn !== undefined) patch.hsn_code = hsn;
+      const category = str(row[iCategory]); if (category !== undefined) patch.category = category;
       const unit = str(row[iUnit]); if (unit !== undefined) patch.unit = unit;
       const notes = str(row[iNotes]); if (notes !== undefined) patch.notes = notes;
+      const exp = str(row[iExp]); if (exp !== undefined) patch.exp_date = exp;
 
       const existing = await fetchByName(name);
       if (existing) {

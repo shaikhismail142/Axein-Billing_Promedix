@@ -135,6 +135,7 @@
   backdrop-filter: blur(12px) saturate(150%);
   box-shadow: var(--shadow);
   overflow: hidden;
+  transition: transform .18s ease, box-shadow .18s ease, background .18s ease, border-color .18s ease;
 }
 .ax-header::before {
   content: "";
@@ -145,7 +146,25 @@
     linear-gradient(120deg, color-mix(in oklab, var(--primary) 12%, transparent), transparent 55%);
   opacity: 0.65;
   pointer-events: none;
+  transition: opacity .18s ease;
 }
+.ax-header::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(120deg, rgba(255,255,255,0.35), rgba(255,255,255,0.02) 45%, rgba(255,255,255,0.22));
+  opacity: 0.08;
+  mix-blend-mode: screen;
+  pointer-events: none;
+  transition: opacity .2s ease;
+}
+.ax-header:hover {
+  transform: translateY(-1px);
+  border-color: color-mix(in oklab, var(--primary) 32%, var(--glass-brd));
+  box-shadow: 0 14px 30px rgba(2,6,23,0.18);
+}
+.ax-header:hover::before { opacity: 0.9; }
+.ax-header:hover::after { opacity: 0.18; }
 .ax-header-inner { position: relative; z-index: 1; }
 .ax-brand-badge {
   display: inline-flex;
@@ -171,7 +190,7 @@
   background: color-mix(in oklab, var(--surface-2) 88%, transparent);
   color: var(--text);
   text-decoration: none;
-  font-size: 0.9rem;
+  font-size: 0.95rem;
   font-weight: 600;
   transition: transform .08s ease, background .12s ease, box-shadow .12s ease;
 }

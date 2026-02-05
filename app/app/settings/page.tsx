@@ -136,7 +136,17 @@ export default function SettingsPage() {
   // Logo upload state
   const [logoBusy, setLogoBusy] = useState(false);
   const [logoError, setLogoError] = useState<string | null>(null);
+  const [logoPreviewError, setLogoPreviewError] = useState(false);
   const logoInputRef = useRef<HTMLInputElement>(null);
+  const previewSrc = (() => {
+    if (!form.logo_url) return "";
+    if (typeof window === "undefined") return form.logo_url;
+    try {
+      return new URL(form.logo_url, window.location.origin).toString();
+    } catch {
+      return form.logo_url;
+    }
+  })();
 
   // Load business settings
   useEffect(() => {
@@ -154,6 +164,11 @@ export default function SettingsPage() {
       }
     })();
   }, []);
+
+  // Reset preview error when URL changes
+  useEffect(() => {
+    setLogoPreviewError(false);
+  }, [form.logo_url]);
 
   // Load invoice defaults
   useEffect(() => {
@@ -455,7 +470,8 @@ export default function SettingsPage() {
               <div className="flex-1">
                 <div className="text-sm font-medium mb-1">Company Logo</div>
                 <div className="text-xs opacity-70 mb-2">
-                  PNG, JPG, or WebP • up to 2&nbsp;MB. The logo is rendered with aspect-ratio preserved and a max height of ~48px in the PDF, so it won’t distort.
+                  PNG, JPG, or WebP • up to 2&nbsp;MB. Recommended size: <b>400×120px</b> (or ~3:1).
+                  The invoice renders logos at ~48px height, so use a clean, high‑contrast logo.
                 </div>
 
                 <div className="flex items-center gap-2">
@@ -501,15 +517,20 @@ export default function SettingsPage() {
                     >
                       {/* Using <img> deliberately so the same URL works in server-side PDF rendering */}
                       {/* eslint-disable-next-line @next/next/no-img-element */}
-                      <img
-                        src={form.logo_url}
-                        alt="Company Logo"
-                        style={{
-                          maxHeight: 64, // preview; PDF will use ~48px max
-                          maxWidth: 260,
-                          objectFit: 'contain',
-                        }}
-                      />
+                      {!logoPreviewError ? (
+                        <img
+                          src={previewSrc}
+                          alt="Company Logo"
+                          onError={() => setLogoPreviewError(true)}
+                          style={{
+                            maxHeight: 64, // preview; PDF will use ~48px max
+                            maxWidth: 260,
+                            objectFit: 'contain',
+                          }}
+                        />
+                      ) : (
+                        <div className="text-xs muted">Preview unavailable. Check the logo URL.</div>
+                      )}
                     </div>
                   </div>
                 ) : null}

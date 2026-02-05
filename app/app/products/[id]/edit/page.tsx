@@ -16,6 +16,7 @@ type ProductApi = {
   brand?: string;
   hsn_code?: string;
   unit?: string;
+  exp_date?: string | null;
   notes?: string;
 };
 
@@ -97,6 +98,7 @@ export default async function Page({ params }: { params: { id: string } }) {
         brand={data.brand ?? ""}
         hsn_code={data.hsn_code ?? ""}
         unit={data.unit ?? ""}
+        exp_date={data.exp_date ?? ""}
         notes={data.notes ?? ""}
       />
     </div>

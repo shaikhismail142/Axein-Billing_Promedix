@@ -18,20 +18,39 @@ function s(v: unknown) {
 
 async function readMeta(id: number) {
   try {
-    const r = await pool.query(`SELECT id, name, meta, category FROM products WHERE id=$1`, [id]);
+    const r = await pool.query(`SELECT id, name, meta, category, created_at, updated_at FROM products WHERE id=$1`, [id]);
     if (r.rowCount === 0) return null;
-    return r.rows[0] as { id: number; name: string; meta: any; category?: string | null };
+    return r.rows[0] as {
+      id: number;
+      name: string;
+      meta: any;
+      category?: string | null;
+      created_at?: string | null;
+      updated_at?: string | null;
+    };
   } catch {
-    const r = await pool.query(`SELECT id, name, meta FROM products WHERE id=$1`, [id]);
+    const r = await pool.query(`SELECT id, name, meta, category, created_at FROM products WHERE id=$1`, [id]);
     if (r.rowCount === 0) return null;
-    return r.rows[0] as { id: number; name: string; meta: any; category?: string | null };
+    return r.rows[0] as {
+      id: number;
+      name: string;
+      meta: any;
+      category?: string | null;
+      created_at?: string | null;
+      updated_at?: string | null;
+    };
   }
 }
-async function writeMeta(id: number, patch: Record<string, any>) {
+async function writeMeta(id: number, patch: Record<string, any>, opts?: { name?: string }) {
   const cur = await readMeta(id);
   if (!cur) return null;
   const next = { ...(cur.meta || {}), ...patch };
-  await pool.query(`UPDATE products SET meta=$2::jsonb WHERE id=$1`, [id, JSON.stringify(next)]);
+  const nextName = opts?.name ?? cur.name;
+  try {
+    await pool.query(`UPDATE products SET name=$2, meta=$3::jsonb, updated_at=now() WHERE id=$1`, [id, nextName, JSON.stringify(next)]);
+  } catch {
+    await pool.query(`UPDATE products SET name=$2, meta=$3::jsonb WHERE id=$1`, [id, nextName, JSON.stringify(next)]);
+  }
   return readMeta(id);
 }
 
@@ -59,6 +78,8 @@ export async function GET(_req: Request, { params }: { params: { id: string } })
     hsn_code: s(m.hsn_code),
     unit: s(m.unit),
     notes: s(m.notes),
+    exp_date: s(m.exp_date ?? m.expiry_date),
+    updated_at: (row as any).updated_at ?? (row as any).created_at ?? null,
     meta: m,
   });
 }
@@ -70,6 +91,7 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
 
   const body = await req.json().catch(() => ({}));
   const patch: Record<string, any> = {};
+  const name = s(body.name);
 
   const price = n(body.selling_price ?? body.price);
   if (price !== undefined) patch.selling_price = price;
@@ -104,11 +126,14 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
   const category = s(body.category);
   if (category !== undefined) patch.category = category;
 
-  if (Object.keys(patch).length === 0) {
+  const expDate = s(body.exp_date ?? body.expiry_date);
+  if (expDate !== undefined) patch.exp_date = expDate;
+
+  if (Object.keys(patch).length === 0 && name === undefined) {
     return NextResponse.json({ ok: true, message: "nothing to update" });
   }
 
-  const updated = await writeMeta(id, patch);
+  const updated = await writeMeta(id, patch, { name });
   if (!updated) return NextResponse.json({ ok: false, error: "not found" }, { status: 404 });
 
   // Best-effort sync to column if it exists

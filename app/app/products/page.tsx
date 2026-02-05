@@ -14,6 +14,7 @@ type Product = {
   hsn_code?: string | null;
   batch_no?: string | null;
   exp_date?: string | null;
+  updated_at?: string | null;
   price: string | number;
   stock_qty: number;
   low_stock_threshold: number;
@@ -72,6 +73,20 @@ function materialFromSku(sku?: string | null) {
   if (t.includes("BRASS")) return "BRASS";
   if (t.includes("GI")) return "GI";
   return null;
+}
+function fmtUpdated(ts?: string | null) {
+  if (!ts) return "—";
+  try {
+    return new Date(ts).toLocaleString("en-IN", {
+      year: "numeric",
+      month: "short",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+  } catch {
+    return String(ts);
+  }
 }
 
 /* ---------- Data fetch ---------- */
@@ -378,6 +393,7 @@ export default async function ProductsPage({ searchParams }: { searchParams: Pag
                   <SortableTh label="Price" active={sort === "price"} dir={dir} href={sortHref("price")} />
                   <SortableTh label="Stock" active={sort === "stock"} dir={dir} href={sortHref("stock")} />
                   <th className="px-3 py-2 text-left">Low Stock</th>
+                  <th className="px-3 py-2 text-left">Last Edited</th>
                   <th className="px-3 py-2 text-right">Actions</th>
                 </tr>
               </thead>
@@ -411,6 +427,7 @@ export default async function ProductsPage({ searchParams }: { searchParams: Pag
                       <td className={`px-3 py-2 ${isLow ? "text-red-600 font-semibold" : ""}`}>
                         {p.low_stock_threshold}
                       </td>
+                      <td className="px-3 py-2">{fmtUpdated(p.updated_at)}</td>
                       <td className="px-3 py-2 text-right">
                         <Link className="px-2 py-1 rounded-lg border" href={`/products/${p.id}/edit`}>
                           Edit
@@ -421,7 +438,7 @@ export default async function ProductsPage({ searchParams }: { searchParams: Pag
                 })}
                 {items.length === 0 && (
                   <tr>
-                    <td colSpan={12} className="px-3 py-6 text-center" style={{ color: "var(--muted)" }}>
+                    <td colSpan={13} className="px-3 py-6 text-center" style={{ color: "var(--muted)" }}>
                       No products found
                     </td>
                   </tr>

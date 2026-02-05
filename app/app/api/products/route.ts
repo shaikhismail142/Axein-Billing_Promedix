@@ -18,6 +18,18 @@ export async function GET(req: Request) {
   const category = (url.searchParams.get("category") || "").trim();
   const lowOnly = (url.searchParams.get("low") || "").trim() === "1";
 
+  // Check if updated_at exists (best-effort)
+  let hasUpdatedAt = false;
+  try {
+    const u = await pool.query(
+      `SELECT 1 FROM information_schema.columns
+       WHERE table_schema='public' AND table_name='products' AND column_name='updated_at'`
+    );
+    hasUpdatedAt = (u.rowCount ?? u.rows?.length ?? 0) > 0;
+  } catch {
+    hasUpdatedAt = false;
+  }
+
   // Build WHERE (name or meta->>'sku')
   const where: string[] = [];
   const params: unknown[] = [];
@@ -88,6 +100,8 @@ export async function GET(req: Request) {
   const stockExpr = `COALESCE(NULLIF(p.meta->>'stock_qty','')::int,
                                NULLIF(p.meta->>'stock','')::int, 0)`;
   const skuExpr = `COALESCE(p.meta->>'sku','')`;
+  const metaExpExpr = `COALESCE(NULLIF(p.meta->>'exp_date',''), NULLIF(p.meta->>'expiry_date',''))`;
+  const updatedExpr = hasUpdatedAt ? `COALESCE(p.updated_at, p.created_at)` : `p.created_at`;
 
   let orderBy = `p.id ${dir}`;
   let joinSql = "";
@@ -128,6 +142,8 @@ export async function GET(req: Request) {
           ${stockExpr} AS stock_qty,
           COALESCE(NULLIF(p.meta->>'low_stock_threshold','')::int, 0) AS low_stock_threshold,
           ${skuExpr} AS sku,
+          ${metaExpExpr} AS meta_exp_date,
+          ${updatedExpr} AS updated_at,
           bmin.batch_no,
           bmin.exp_date
         FROM products p
@@ -160,7 +176,9 @@ export async function GET(req: Request) {
         ${priceExpr}                                      AS price,
         ${stockExpr}                                      AS stock_qty,
         COALESCE(NULLIF(p.meta->>'low_stock_threshold','')::int, 0) AS low_stock_threshold,
-        ${skuExpr}                                        AS sku
+        ${skuExpr}                                        AS sku,
+        ${metaExpExpr}                                    AS meta_exp_date,
+        ${updatedExpr}                                    AS updated_at
         ${selectExtras}
       FROM products p
       ${joinSql}
@@ -245,7 +263,7 @@ export async function GET(req: Request) {
     return {
       ...r,
       batch_no: b?.batch_no ?? null,
-      exp_date: b?.exp_date ?? null,
+      exp_date: b?.exp_date ?? r.meta_exp_date ?? null,
     };
   });
 
@@ -282,6 +300,7 @@ export async function POST(req: Request) {
       brand: payload.brand != null ? String(payload.brand) : null,
       hsn_code: payload.hsn_code != null ? String(payload.hsn_code) : null,
       category: category || null,
+      exp_date: payload.exp_date != null && String(payload.exp_date).trim() !== "" ? String(payload.exp_date).trim() : null,
       unit: payload.unit != null ? String(payload.unit) : null,
       notes: payload.notes != null ? String(payload.notes) : null,
     };

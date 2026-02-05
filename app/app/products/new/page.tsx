@@ -40,6 +40,7 @@ export default function NewProductPage() {
         brand: String(fd.get("brand") || ""),
         hsn_code: String(fd.get("hsn_code") || ""),
         unit: String(fd.get("unit") || ""),
+        exp_date: String(fd.get("exp_date") || ""),
         notes: String(fd.get("notes") || ""),
       };
       // If category is new, try creating it (best-effort)
@@ -121,10 +122,16 @@ export default function NewProductPage() {
               <input name="hsn_code" />
             </label>
           </div>
-          <label>
-            <div>Unit</div>
-            <input name="unit" />
-          </label>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+            <label>
+              <div>Default Expiry (optional)</div>
+              <input name="exp_date" type="date" />
+            </label>
+            <label>
+              <div>Unit</div>
+              <input name="unit" />
+            </label>
+          </div>
           <label>
             <div>Notes</div>
             <textarea name="notes" rows={3} />

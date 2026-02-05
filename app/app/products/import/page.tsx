@@ -32,8 +32,8 @@ export default function ImportProductsPage() {
 
   function downloadTemplate() {
     const csv =
-      "name,price,gst_slab,stock_qty,cost_price,low_stock_threshold,sku,brand,hsn_code,unit,notes\n" +
-      "Shampoo 200ml,120,18,20,70,5,SH-200,Acme,33059011,pcs,Popular\n";
+      "name,category,price,gst_slab,stock_qty,cost_price,low_stock_threshold,sku,brand,hsn_code,unit,exp_date,notes\n" +
+      "Shampoo 200ml,cosmetics,120,18,20,70,5,SH-200,Acme,33059011,pcs,2026-12-31,Popular\n";
     const blob = new Blob([csv], { type: "text/csv" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
@@ -48,8 +48,8 @@ export default function ImportProductsPage() {
       <div className="card" style={{ padding: 16, maxWidth: 780 }}>
         <h1 style={{ marginTop: 0 }}>Import Products (CSV)</h1>
         <p className="muted" style={{ marginTop: 4 }}>
-          Supported columns (case-insensitive): <b>name</b>, <b>price</b>, <b>gst_slab</b>, <b>stock_qty</b>,
-          <b> cost_price</b>, <b>low_stock_threshold</b>, <b>sku</b>, <b>brand</b>, <b>hsn_code</b>, <b>unit</b>, <b>notes</b>.
+          Supported columns (case-insensitive): <b>name</b>, <b>category</b>, <b>price</b>, <b>gst_slab</b>, <b>stock_qty</b>,
+          <b> cost_price</b>, <b>low_stock_threshold</b>, <b>sku</b>, <b>brand</b>, <b>hsn_code</b>, <b>unit</b>, <b>exp_date</b>, <b>notes</b>.
           Only <b>name</b> is required. Matching is by product name (case-insensitive).
         </p>
 

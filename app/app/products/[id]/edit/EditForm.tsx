@@ -14,6 +14,7 @@ type EditFormProps = {
   brand: string;
   hsn_code: string;
   unit: string;
+  exp_date?: string | null;
   notes: string;
 };
 
@@ -43,6 +44,7 @@ export default function EditForm(p: EditFormProps) {
 
     const form = new FormData(e.currentTarget);
     const payload = {
+      name: String(form.get("name") || "").trim(),
       category: String(form.get("category") || "").trim() || null,
       selling_price: Number(form.get("selling_price") || 0),
       stock_qty: Number(form.get("stock_qty") || 0),
@@ -51,6 +53,7 @@ export default function EditForm(p: EditFormProps) {
       brand: String(form.get("brand") || "").trim() || null,
       hsn_code: String(form.get("hsn_code") || "").trim() || null,
       unit: String(form.get("unit") || "").trim() || null,
+      exp_date: String(form.get("exp_date") || "").trim() || null,
       notes: String(form.get("notes") || "").trim() || null,
     };
 
@@ -78,8 +81,7 @@ export default function EditForm(p: EditFormProps) {
       <div className="rounded-xl border p-4 grid grid-cols-1 sm:grid-cols-2 gap-4">
         <div>
           <label className="block text-sm" style={labelStyle}>Name</label>
-          <input value={p.name} disabled className="border rounded-lg px-3 py-2 w-full opacity-70" />
-          <div className="text-xs mt-1" style={{ color: "var(--muted)" }}>Name editing not enabled here.</div>
+          <input name="name" defaultValue={p.name} required className="border rounded-lg px-3 py-2 w-full" />
         </div>
 
         <div>
@@ -125,6 +127,10 @@ export default function EditForm(p: EditFormProps) {
         <div>
           <label className="block text-sm" style={labelStyle}>Unit</label>
           <input name="unit" defaultValue={p.unit} className="border rounded-lg px-3 py-2 w-full" />
+        </div>
+        <div>
+          <label className="block text-sm" style={labelStyle}>Default Expiry (optional)</label>
+          <input name="exp_date" type="date" defaultValue={p.exp_date ?? ""} className="border rounded-lg px-3 py-2 w-full" />
         </div>
 
         <div className="sm:col-span-2">

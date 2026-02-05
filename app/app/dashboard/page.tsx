@@ -143,13 +143,19 @@ export default function DashboardPage() {
 
   return (
     <div className="container">
-      {/* Header row: IST Clock */}
-      <div style={{ display: 'flex', justifyContent: 'flex-end', margin: '6px 0 12px' }}>
-        <AnalogClockIST size={200} />
+      {/* Header / Hero */}
+      <div className="card" style={{ padding: 16, marginBottom: 12, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16, flexWrap: 'wrap' }}>
+        <div>
+          <h1 style={{ margin: 0, fontSize: 24, fontWeight: 700 }}>Dashboard</h1>
+          <div className="muted" style={{ marginTop: 4 }}>At‑a‑glance sales and inventory insights.</div>
+        </div>
+        <div className="glass" style={{ padding: 8, borderRadius: 16 }}>
+          <AnalogClockIST size={140} />
+        </div>
       </div>
 
       {/* Range & Mode controls */}
-      <div style={{ display: 'flex', gap: 8, alignItems: 'center', margin: '8px 0 12px', flexWrap: 'wrap' }}>
+      <div className="card" style={{ padding: 12, margin: '8px 0 12px', display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
         <span className="muted" style={{ fontSize: 12 }}>Range:</span>
         <button className="glass-btn" onClick={() => setRange({ kind: 'preset', days: 7 })}  aria-pressed={range.kind==='preset'&&range.days===7}>7d</button>
         <button className="glass-btn" onClick={() => setRange({ kind: 'preset', days: 14 })} aria-pressed={range.kind==='preset'&&range.days===14}>14d</button>
