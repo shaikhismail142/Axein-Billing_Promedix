@@ -13,18 +13,44 @@ SET amount_paid = COALESCE((meta->>'amount_paid')::numeric, 0)
 WHERE (meta->>'amount_paid') IS NOT NULL
   AND (amount_paid IS NULL OR amount_paid = 0);
 
-UPDATE purchases
-SET amount_paid = COALESCE(grand_total, total_amount, 0)
-WHERE (meta->>'paid')::boolean = true
-  AND (amount_paid IS NULL OR amount_paid = 0);
+DO $$
+DECLARE
+  has_grand boolean;
+  has_total boolean;
+  total_expr text := '0';
+BEGIN
+  SELECT EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_schema='public' AND table_name='purchases' AND column_name='grand_total'
+  ) INTO has_grand;
 
--- Backfill pending_amount and payment_status
-UPDATE purchases
-SET pending_amount = GREATEST(COALESCE(grand_total, total_amount, 0) - COALESCE(amount_paid, 0), 0),
-    payment_status = CASE
-      WHEN COALESCE(amount_paid, 0) >= COALESCE(grand_total, total_amount, 0) - 0.01 THEN 'Paid'
-      WHEN COALESCE(amount_paid, 0) > 0 THEN 'Partial'
-      ELSE 'Pending'
-    END
-WHERE (pending_amount IS NULL OR pending_amount = 0 OR payment_status IS NULL);
+  SELECT EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_schema='public' AND table_name='purchases' AND column_name='total_amount'
+  ) INTO has_total;
 
+  IF has_grand THEN
+    total_expr := 'grand_total';
+  ELSIF has_total THEN
+    total_expr := 'total_amount';
+  END IF;
+
+  EXECUTE format($f$
+    UPDATE purchases
+       SET amount_paid = COALESCE(%1$s, 0)
+     WHERE (meta->>'paid')::boolean = true
+       AND (amount_paid IS NULL OR amount_paid = 0);
+  $f$, total_expr);
+
+  -- Backfill pending_amount and payment_status
+  EXECUTE format($f$
+    UPDATE purchases
+       SET pending_amount = GREATEST(COALESCE(%1$s, 0) - COALESCE(amount_paid, 0), 0),
+           payment_status = CASE
+             WHEN COALESCE(amount_paid, 0) >= COALESCE(%1$s, 0) - 0.01 THEN 'Paid'
+             WHEN COALESCE(amount_paid, 0) > 0 THEN 'Partial'
+             ELSE 'Pending'
+           END
+     WHERE (pending_amount IS NULL OR pending_amount = 0 OR payment_status IS NULL);
+  $f$, total_expr);
+END $$;
