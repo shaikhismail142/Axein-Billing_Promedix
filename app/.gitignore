@@ -27,5 +27,6 @@ logs/
 *.log
 *.sqlite
 *.sqlite-journal
+tsconfig.tsbuildinfo
 tools/license-keygen/ed25519-private.pem
 tools/license-keygen/licenses/
