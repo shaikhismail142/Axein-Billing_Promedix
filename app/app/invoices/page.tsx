@@ -15,6 +15,8 @@ type Invoice = {
   invoice_no: string;
   created_at: string;       // ISO
   total: number;
+  pending_amount: number;
+  payment_status?: string | null;
   customer_name: string | null;
 };
 type ApiResp = {
@@ -221,7 +223,25 @@ export default async function InvoicesPage({ searchParams }: { searchParams: Pag
                     <tr key={inv.id}>
                       <td className="px-3 py-2"><RowCheckbox id={inv.id} /></td>
                       <td className="px-3 py-2">
-                        <Link href={`/invoices/${inv.id}`} className="underline">{inv.invoice_no}</Link>
+                        <div className="flex items-center gap-2">
+                          <Link href={`/invoices/${inv.id}`} className="underline">{inv.invoice_no}</Link>
+                          {(() => {
+                            const pending = Number(inv.pending_amount || 0);
+                            const status = (inv.payment_status || "").toLowerCase();
+                            const label = pending <= 0 ? "Paid" : status === "partial" ? "Partial" : "Pending";
+                            const cls =
+                              label === "Paid"
+                                ? "bg-emerald-100 text-emerald-900 dark:bg-emerald-500/20 dark:text-emerald-200"
+                                : label === "Partial"
+                                ? "bg-amber-100 text-amber-900 dark:bg-amber-500/20 dark:text-amber-200"
+                                : "bg-sky-100 text-sky-900 dark:bg-sky-500/20 dark:text-sky-200";
+                            return (
+                              <span className={`px-2 py-0.5 rounded-full text-xs ${cls}`}>
+                                {label}
+                              </span>
+                            );
+                          })()}
+                        </div>
                       </td>
                       <td className="px-3 py-2">{new Date(inv.created_at).toLocaleString('en-IN')}</td>
                       <td className="px-3 py-2">{inv.customer_name ?? "—"}</td>

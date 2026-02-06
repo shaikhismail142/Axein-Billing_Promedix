@@ -30,6 +30,8 @@ export default async function AccountingPage({ searchParams }: { searchParams?: 
 
   const summary = data?.summary || { receivables: 0, payables: 0, net: 0 };
   const aging = data?.aging || { bucket_0_30: 0, bucket_31_60: 0, bucket_60_plus: 0 };
+  const customers = Array.isArray(data?.customers) ? data.customers : [];
+  const customerAging = data?.customer_aging || { bucket_0_30: 0, bucket_31_60: 0, bucket_60_plus: 0 };
 
   return (
     <div className="p-4 md:p-6 space-y-4">
@@ -59,9 +61,9 @@ export default async function AccountingPage({ searchParams }: { searchParams?: 
         </div>
       </div>
 
-      {/* Aging */}
+      {/* Vendor Aging */}
       <div className="card p-4">
-        <div className="text-sm font-semibold mb-2">Payables Aging</div>
+        <div className="text-sm font-semibold mb-2">Vendor Payables Aging</div>
         <div className="grid gap-2 md:grid-cols-3">
           <div className="flex items-center justify-between rounded-xl border border-[color:var(--glass-brd)] px-3 py-2">
             <span>0–30 days</span>
@@ -74,6 +76,25 @@ export default async function AccountingPage({ searchParams }: { searchParams?: 
           <div className="flex items-center justify-between rounded-xl border border-[color:var(--glass-brd)] px-3 py-2">
             <span>60+ days</span>
             <b>{inr(aging.bucket_60_plus || 0)}</b>
+          </div>
+        </div>
+      </div>
+
+      {/* Customer Aging */}
+      <div className="card p-4">
+        <div className="text-sm font-semibold mb-2">Customer Receivables Aging</div>
+        <div className="grid gap-2 md:grid-cols-3">
+          <div className="flex items-center justify-between rounded-xl border border-[color:var(--glass-brd)] px-3 py-2">
+            <span>0–30 days</span>
+            <b>{inr(customerAging.bucket_0_30 || 0)}</b>
+          </div>
+          <div className="flex items-center justify-between rounded-xl border border-[color:var(--glass-brd)] px-3 py-2">
+            <span>31–60 days</span>
+            <b>{inr(customerAging.bucket_31_60 || 0)}</b>
+          </div>
+          <div className="flex items-center justify-between rounded-xl border border-[color:var(--glass-brd)] px-3 py-2">
+            <span>60+ days</span>
+            <b>{inr(customerAging.bucket_60_plus || 0)}</b>
           </div>
         </div>
       </div>
@@ -91,12 +112,12 @@ export default async function AccountingPage({ searchParams }: { searchParams?: 
         {q && <a className="glass-btn px-3 py-2 rounded-2xl" href="/accounting">Clear</a>}
       </form>
 
-      {/* Debt table */}
+      {/* Vendor Debt table */}
       <div
         id="debts"
         className={`card p-4 ${focus === "debts" ? "ring-2 ring-[color:var(--primary)] ring-offset-2 ring-offset-[color:var(--bg)]" : ""}`}
       >
-        <div className="text-sm font-semibold mb-2">Debt Management</div>
+        <div className="text-sm font-semibold mb-2">Vendor Debt (Purchases)</div>
         <div className="table-wrap">
           <table className="table">
             <thead>
@@ -134,6 +155,57 @@ export default async function AccountingPage({ searchParams }: { searchParams?: 
                 <tr>
                   <td colSpan={5} className="text-center py-6" style={{ color: "var(--muted)" }}>
                     No vendor debts found.
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {/* Customer Debt table */}
+      <div
+        id="customer-debts"
+        className={`card p-4 ${focus === "customers" ? "ring-2 ring-[color:var(--primary)] ring-offset-2 ring-offset-[color:var(--bg)]" : ""}`}
+      >
+        <div className="text-sm font-semibold mb-2">Customer Debt (Invoices)</div>
+        <div className="table-wrap">
+          <table className="table">
+            <thead>
+              <tr>
+                <th>Customer</th>
+                <th>Outstanding</th>
+                <th>Last Invoice</th>
+                <th>Status</th>
+                <th>Details</th>
+              </tr>
+            </thead>
+            <tbody>
+              {customers.map((v: any) => (
+                <tr key={v.customer_key}>
+                  <td>{v.customer_name}</td>
+                  <td><b>{inr(v.outstanding || 0)}</b></td>
+                  <td>{v.last_tx ? new Date(v.last_tx).toLocaleDateString("en-IN") : "-"}</td>
+                  <td>{v.status}</td>
+                  <td>
+                    <details>
+                      <summary className="cursor-pointer text-sm">Recent invoices</summary>
+                      <div className="mt-2 text-xs space-y-1">
+                        {(v.recent || []).length === 0 && <div className="muted">No recent invoices</div>}
+                        {(v.recent || []).map((r: any) => (
+                          <div key={r.id}>
+                            #{r.id}{r.invoice_no ? ` • ${r.invoice_no}` : ""} — {r.invoice_date ? new Date(r.invoice_date).toLocaleDateString("en-IN") : "-"} • Pending {inr(r.pending || 0)}
+                          </div>
+                        ))}
+                      </div>
+                    </details>
+                  </td>
+                </tr>
+              ))}
+              {customers.length === 0 && (
+                <tr>
+                  <td colSpan={5} className="text-center py-6" style={{ color: "var(--muted)" }}>
+                    No customer debts found.
                   </td>
                 </tr>
               )}

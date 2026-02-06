@@ -17,6 +17,18 @@ type DebtRow = {
   pending: number;
 };
 
+type CustomerDebtRow = {
+  customer_key: string;
+  customer_name: string;
+  customer_id: number | null;
+  invoice_id: number | null;
+  invoice_no: string | null;
+  invoice_date: string | null;
+  total: number;
+  paid: number;
+  pending: number;
+};
+
 async function getColumns(client: any, table: string): Promise<Set<string>> {
   const r = await client.query(
     `SELECT LOWER(column_name) AS col
@@ -153,7 +165,11 @@ export async function GET(_req: NextRequest) {
 
     // Receivables (sales pending)
     const hasSMeta = sCols.has("meta");
-    const salesTotalExpr = sCols.has("total") ? "s.total" : "0";
+    const salesTotalExpr = sCols.has("total")
+      ? "s.total"
+      : sCols.has("grand_total")
+      ? "s.grand_total"
+      : "0";
     const salesPaidExpr = sCols.has("amount_paid")
       ? "s.amount_paid"
       : hasSMeta
@@ -170,6 +186,94 @@ export async function GET(_req: NextRequest) {
     const payables = vendors.reduce((acc, v) => acc + Number(v.outstanding || 0), 0);
     const net = receivables - payables;
 
+    // Customer debts (receivables)
+    const custKeyExpr = hasSMeta
+      ? "COALESCE(CAST(s.customer_id AS TEXT), COALESCE(s.meta->>'customer_name', 'unknown'))"
+      : "COALESCE(CAST(s.customer_id AS TEXT), 'unknown')";
+    const custNameExpr = hasSMeta
+      ? "COALESCE(c.name, s.meta->>'customer_name', 'Unknown')"
+      : "COALESCE(c.name, 'Unknown')";
+    const invNoExpr = sCols.has("invoice_no") ? "s.invoice_no" : "NULL";
+    const invDateExpr = sCols.has("invoice_date") ? "s.invoice_date" : "s.created_at";
+
+    const custRows = (
+      await client.query(
+        `
+        SELECT
+          ${custKeyExpr} AS customer_key,
+          ${custNameExpr} AS customer_name,
+          s.customer_id AS customer_id,
+          s.id AS invoice_id,
+          ${invNoExpr} AS invoice_no,
+          ${invDateExpr} AS invoice_date,
+          COALESCE(${salesTotalExpr}, 0) AS total,
+          COALESCE(${salesPaidExpr}, 0) AS paid,
+          COALESCE(${salesPendingExpr}, 0) AS pending
+        FROM sales s
+        LEFT JOIN customers c ON c.id = s.customer_id
+        WHERE COALESCE(${salesPendingExpr}, 0) > 0
+        ORDER BY ${invDateExpr} DESC NULLS LAST
+        `
+      )
+    ).rows as CustomerDebtRow[];
+
+    const cMap = new Map<string, any>();
+    const cAging = { bucket_0_30: 0, bucket_31_60: 0, bucket_60_plus: 0 };
+
+    for (const r of custRows) {
+      const key = r.customer_key || r.customer_name;
+      if (!cMap.has(key)) {
+        cMap.set(key, {
+          customer_key: key,
+          customer_name: r.customer_name,
+          customer_id: r.customer_id ?? null,
+          outstanding: 0,
+          total_billed: 0,
+          last_tx: r.invoice_date,
+          status: "Pending",
+          recent: [] as any[],
+        });
+      }
+      const v = cMap.get(key);
+      v.outstanding += Number(r.pending || 0);
+      v.total_billed += Number(r.total || 0);
+      if (!v.last_tx || (r.invoice_date && new Date(r.invoice_date) > new Date(v.last_tx))) {
+        v.last_tx = r.invoice_date;
+      }
+      if (r.invoice_id != null) {
+        v.recent.push({
+          id: r.invoice_id,
+          invoice_no: r.invoice_no,
+          invoice_date: r.invoice_date,
+          total: Number(r.total || 0),
+          paid: Number(r.paid || 0),
+          pending: Number(r.pending || 0),
+        });
+      }
+
+      if (Number(r.pending) > 0 && r.invoice_date) {
+        const d = new Date(r.invoice_date);
+        d.setHours(0, 0, 0, 0);
+        const days = Math.floor((today.getTime() - d.getTime()) / (1000 * 60 * 60 * 24));
+        if (days <= 30) cAging.bucket_0_30 += Number(r.pending);
+        else if (days <= 60) cAging.bucket_31_60 += Number(r.pending);
+        else cAging.bucket_60_plus += Number(r.pending);
+      }
+    }
+
+    const customers = Array.from(cMap.values()).map((v) => {
+      v.recent.sort((a: any, b: any) => {
+        const da = a.invoice_date ? new Date(a.invoice_date).getTime() : 0;
+        const db = b.invoice_date ? new Date(b.invoice_date).getTime() : 0;
+        return db - da;
+      });
+      v.recent = v.recent.slice(0, 3);
+      v.status = v.outstanding > 0 ? "Open" : "Settled";
+      return v;
+    });
+
+    customers.sort((a, b) => b.outstanding - a.outstanding);
+
     return NextResponse.json({
       ok: true,
       summary: {
@@ -179,6 +283,8 @@ export async function GET(_req: NextRequest) {
       },
       aging,
       vendors,
+      customer_aging: cAging,
+      customers,
     });
   } catch (err: any) {
     console.error("GET /api/accounting/debts", err);
