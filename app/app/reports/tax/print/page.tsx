@@ -104,7 +104,7 @@ export default async function TaxPrintPage({
           </thead>
           <tbody>
             {months.map((m) => (
-              <tr key={m.month}>
+              <tr key={m.period}>
                 <td>{m.label}</td>
                 <td className="right">{inr(m.output_tax)}</td>
                 <td className="right">{inr(m.input_tax)}</td>
