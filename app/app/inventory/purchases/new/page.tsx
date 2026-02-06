@@ -203,11 +203,19 @@ export default async function NewPurchasePage({ searchParams }: { searchParams?:
         </div>
         <div className="flex gap-2">
           <Link href="/inventory/purchases" className="px-3 py-2 rounded-2xl border border-black/10 bg-[color:var(--surface-1)] hover:bg-[color:var(--surface-2)]">Back to Purchases</Link>
-          <Link href="/inventory/purchases/new/template.csv" className="px-3 py-2 rounded-2xl border border-black/10 bg-[color:var(--surface-1)] hover:bg-[color:var(--surface-2)]">CSV Template</Link>
         </div>
       </div>
 
       {error ? <div className="rounded-xl border border-red-200 bg-red-50 text-red-700 p-3 text-sm">{error}</div> : null}
+
+      <div className="card p-4 text-sm">
+        <div className="font-medium">Tips for faster purchase entry</div>
+        <ul className="mt-2 list-disc pl-5 text-[color:var(--muted)]">
+          <li>Use the <b>Import CSV</b> button inside the item table to paste or upload rows.</li>
+          <li>Enable <b>Create missing products automatically</b> to avoid rejections for new items.</li>
+          <li>Use <b>Directly add to inventory</b> only if quantities should update stock immediately.</li>
+        </ul>
+      </div>
 
       <div className="rounded-2xl border border-black/5 bg-[color:var(--surface-1)] p-4 md:p-6">
         <form action={createPurchase} className="space-y-6">

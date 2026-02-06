@@ -325,17 +325,8 @@ export async function GET(req: Request, { params }: { params: { id: string } }) 
   };
   renderPageHeader();
 
-  // Balance due bar (matches improved print styling)
-  const barH = 18;
-  doc.save()
-    .rect(MARGIN, doc.y, contentW, barH)
-    .fill("#eef2ff");
-  doc.fillColor("#0b1220")
-    .font("Helvetica-Bold")
-    .fontSize(FS_BASE + 1)
-    .text(`Balance Due ${inr(balance)}`, MARGIN, doc.y + 4, { width: contentW - 8, align: "right" });
-  doc.restore();
-  doc.y += barH + 10;
+  // Balance due is shown in totals box below; keep header clean.
+  doc.moveDown(0.6);
 
   // ---------- Table (full width; centered cells; equal numeric widths) ----------
   const tableX = MARGIN;

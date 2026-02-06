@@ -46,7 +46,7 @@ export default function ClientShell({ children }: { children: React.ReactNode })
       {/* Content area */}
       <div className="flex-1 min-w-0">
         <Topbar onMenu={onBurger} collapsed={collapsed} />
-        <main className="app-main p-4">
+        <main id="main" className="app-main p-4">
           <div className="container">{children}</div>
         </main>
       </div>

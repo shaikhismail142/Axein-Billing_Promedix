@@ -28,16 +28,14 @@ export default async function TaxPrintPage({
   const statusColor = summary.status === "Payable" ? "#b45309" : "#065f46";
 
   return (
-    <html>
-      <head>
-        <meta charSet="utf-8" />
-        <title>GST Summary {from} to {to}</title>
-        <style>{`
+    <div>
+      <style>{`
           @page { size: A4; margin: 12mm; }
           @media print {
             .noprint { display: none !important; }
           }
-          body { font-family: "Manrope", ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial; margin: 24px; color: #0b1220; }
+          html, body { background: #fff; }
+          body { font-family: "Manrope", ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial; margin: 24px; color: #0b1220; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
           h1,h2,h3 { margin: 0; }
           .muted { color: #64748b; }
           .header { border-radius: 14px; overflow: hidden; border: 1px solid #e5e7eb; }
@@ -50,8 +48,6 @@ export default async function TaxPrintPage({
           th { font-size: 12px; text-transform: uppercase; letter-spacing: 0.03em; color: #475569; }
           .right { text-align: right; }
         `}</style>
-      </head>
-      <body>
         <div className="noprint" style={{ marginBottom: 12 }}>
           <button id="printBtn" style={{ border: "1px solid #e5e7eb", padding: "6px 10px", borderRadius: 6 }}>Print</button>
           <script
@@ -128,7 +124,6 @@ export default async function TaxPrintPage({
             )}
           </tbody>
         </table>
-      </body>
-    </html>
+    </div>
   );
 }

@@ -156,9 +156,6 @@ export default async function PrintInvoice({ params }: { params: { id: string } 
           .header-top { background: #1f4a8f; color: #fff; padding: 18px 20px; display: flex; gap: 16px; justify-content: space-between; align-items: flex-start; }
           .header-title { font-size: 26px; font-weight: 700; letter-spacing: 0.08em; }
           .header-meta { text-align: right; font-size: 12px; line-height: 1.4; }
-          .balance { display:flex; justify-content:flex-end; align-items:center; gap:8px; padding: 10px 16px; background: #f8fafc; border-top: 1px solid #e5e7eb; }
-          .balance-label { color:#475569; font-weight:600; }
-          .balance-pill { background:#0f172a; color:#fff; padding:6px 12px; border-radius:9999px; font-weight:700; letter-spacing:0.02em; }
           table { width: 100%; border-collapse: collapse; margin-top: 12px; }
           th, td { border-top: 1px solid #e5e7eb; padding: 6px 8px; text-align: left; vertical-align: top; }
           .right { text-align: right; }
@@ -226,10 +223,7 @@ export default async function PrintInvoice({ params }: { params: { id: string } 
               </div>
             </div>
           </div>
-          <div className="balance">
-            <span className="balance-label">Balance Due</span>
-            <span className="balance-pill">{inr(balanceDue)}</span>
-          </div>
+          <div style={{ borderTop: "1px solid #e5e7eb" }} />
         </div>
 
         {s.customer_name && (

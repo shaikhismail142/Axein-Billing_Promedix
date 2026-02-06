@@ -19,8 +19,9 @@ function inr(n: number) {
   return `INR (Rs/-) ${amt}`;
 }
 
-export default async function AccountingPage({ searchParams }: { searchParams?: { q?: string } }) {
+export default async function AccountingPage({ searchParams }: { searchParams?: { q?: string; focus?: string } }) {
   const q = (searchParams?.q || "").trim().toLowerCase();
+  const focus = (searchParams?.focus || "").trim().toLowerCase();
   const res = await fetch(`${buildBaseUrl()}/api/accounting/debts`, { cache: "no-store" });
   const data = res.ok ? await res.json() : { ok: false, vendors: [], summary: {}, aging: {} };
 
@@ -91,7 +92,10 @@ export default async function AccountingPage({ searchParams }: { searchParams?: 
       </form>
 
       {/* Debt table */}
-      <div className="card p-4">
+      <div
+        id="debts"
+        className={`card p-4 ${focus === "debts" ? "ring-2 ring-[color:var(--primary)] ring-offset-2 ring-offset-[color:var(--bg)]" : ""}`}
+      >
         <div className="text-sm font-semibold mb-2">Debt Management</div>
         <div className="table-wrap">
           <table className="table">
@@ -140,4 +144,3 @@ export default async function AccountingPage({ searchParams }: { searchParams?: 
     </div>
   );
 }
-

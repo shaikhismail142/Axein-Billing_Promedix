@@ -27,11 +27,21 @@ type ExpiryItem = {
   href: string;
 };
 
+type DebtItem = {
+  type: "debt";
+  id: number;
+  vendor_name: string;
+  pending: number;
+  last_tx?: string | null;
+  href: string;
+};
+
 type AlertsPayload = {
   ok: boolean;
   near_expiry_days: number;
-  counts: { low_stock: number; near_expiry: number; expired: number };
-  items: { low_stock: LowStockItem[]; expiry: ExpiryItem[] };
+  counts: { low_stock: number; near_expiry: number; expired: number; debts?: number };
+  items: { low_stock: LowStockItem[]; expiry: ExpiryItem[]; debts?: DebtItem[] };
+  debts?: { total_pending: number };
 };
 
 function useAlerts(pollMs = 15000) {
@@ -66,7 +76,12 @@ export default function AlertsBell() {
   const { data, open, setOpen } = useAlerts();
   const total = useMemo(() => {
     if (!data?.counts) return 0;
-    return (data.counts.low_stock || 0) + (data.counts.near_expiry || 0) + (data.counts.expired || 0);
+    return (
+      (data.counts.low_stock || 0) +
+      (data.counts.near_expiry || 0) +
+      (data.counts.expired || 0) +
+      (data.counts.debts || 0)
+    );
   }, [data]);
 
   return (
@@ -117,6 +132,25 @@ export default function AlertsBell() {
                    subtitle={`Batch ${it.batch_no || "—"}`}
                    right={it.type === "expired" ? `Expired ${Math.abs(it.days_until)}d` : `${it.days_until}d left`}
                    rightClass={it.type === "expired" ? "text-red-600" : it.days_until <= 7 ? "text-red-600" : "text-yellow-700"}
+              />
+            ))}
+          </Section>
+
+          <div className="my-1 h-px" style={{ background: "var(--glass-brd)" }} />
+
+          <Section
+            title="Vendor Debts"
+            emptyText="No pending vendor bills"
+            hrefAll="/accounting?focus=debts#debts"
+            count={data?.counts.debts || 0}
+          >
+            {(data?.items.debts || []).map((it) => (
+              <Row
+                key={`debt-${it.id}`}
+                href={it.href}
+                title={it.vendor_name}
+                subtitle={it.last_tx ? `Last bill: ${new Date(it.last_tx).toLocaleDateString("en-IN")}` : undefined}
+                right={`INR (Rs/-) ${Number(it.pending || 0).toFixed(2)}`}
               />
             ))}
           </Section>
