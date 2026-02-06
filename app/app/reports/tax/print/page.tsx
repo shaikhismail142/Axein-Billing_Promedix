@@ -28,7 +28,7 @@ export default async function TaxPrintPage({
   const statusColor = summary.status === "Payable" ? "#b45309" : "#065f46";
 
   return (
-    <div className="tax-print">
+    <div className="print-area tax-print">
       <style>{`
           @page { size: A4; margin: 12mm; }
           @media print {
