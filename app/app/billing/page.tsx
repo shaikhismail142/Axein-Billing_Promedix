@@ -209,7 +209,7 @@ export default function Billing() {
       let j: any = null;
       try { j = raw ? JSON.parse(raw) : null; } catch {}
       if (!r.ok) {
-        const msg = j?.error || j?.detail || raw || 'save failed';
+        const msg = j?.detail || j?.error || raw || 'save failed';
         throw new Error(msg);
       }
       if (!j) j = {};

@@ -97,8 +97,12 @@ async function getColumns(client: any, table: string): Promise<Set<string>> {
 
 type ProductCols = { hasMeta: boolean; hasStockQty: boolean; hasStock: boolean };
 
-async function getNextInvoiceNo(client: any): Promise<string> {
+async function getNextInvoiceNo(client: any, salesCols: Set<string>): Promise<string> {
   const prefix = `${currentFYLabel()}/`;
+  if (!salesCols.has("invoice_no")) {
+    const { ymd, hm } = fmtISTParts();
+    return `INV/${ymd}/${hm}-${Math.floor(Math.random() * 900 + 100)}`;
+  }
   const rs = await client.query(
     `SELECT invoice_no
        FROM sales
@@ -410,12 +414,15 @@ export async function POST(req: Request) {
       hasStock: productCols.has("stock"),
     };
 
+    if (salesCols.size === 0) throw new Error("Sales table not found or has no columns.");
+    if (saleItemCols.size === 0) throw new Error("Sale items table not found or has no columns.");
+
     const customer_id = await resolveCustomerId(client, payload);
     const invoiceDateParam =
       payload.invoice_date && nstr(payload.invoice_date)
         ? new Date(String(payload.invoice_date))
         : new Date();
-    const invoice_no = await getNextInvoiceNo(client);
+    const invoice_no = await getNextInvoiceNo(client, salesCols);
     const bizRes = await client.query(`SELECT value_json FROM settings WHERE key='business' LIMIT 1`);
     const biz = (bizRes.rows?.[0]?.value_json ?? {}) as any;
     const dc_no = await getNextDcNo(client, String(biz?.name || "Company"), invoiceDateParam, salesCols);
@@ -548,9 +555,10 @@ export async function POST(req: Request) {
     });
   } catch (err: any) {
     try { await client.query("ROLLBACK"); } catch {}
-    console.error("Create sale failed:", err?.message || err);
+    const detail = String(err?.message || err);
+    console.error("Create sale failed:", detail);
     return new Response(
-      JSON.stringify({ error: "Failed to save sale", detail: String(err?.message || err) }),
+      JSON.stringify({ error: detail || "Failed to save sale", detail }),
       { status: 500, headers: { "Content-Type": "application/json" } }
     );
   } finally {
