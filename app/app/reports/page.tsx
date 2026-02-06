@@ -15,12 +15,20 @@ const Legend              = dynamic(() => import('recharts').then(m => ({ defaul
 const LineChart           = dynamic(() => import('recharts').then(m => m.LineChart),           { ssr: false });
 const Line                = dynamic(() => import('recharts').then(m => m.Line),                { ssr: false });
 const CartesianGrid       = dynamic(() => import('recharts').then(m => m.CartesianGrid),       { ssr: false });
+const ComposedChart       = dynamic(() => import('recharts').then(m => m.ComposedChart),       { ssr: false });
 
 type DateRange = { from: string; to: string };
 type DeadStockItem = { id: number; name: string; stock_qty: number; low_stock_threshold: number };
 type MoversItem = { name: string; qty: number; revenue: number };
 type Retention = { new_count: number; repeat_count: number };
 type LowTrendPoint = { date: string; low_count: number };
+type TaxMonth = { month: string; label: string; input_tax: number; output_tax: number; net_tax: number };
+type TaxReport = {
+  summary: { input_tax: number; output_tax: number; net_tax: number; status: "Payable" | "Credit" };
+  months: TaxMonth[];
+  from: string;
+  to: string;
+};
 
 function toISODate(d: Date) { const z = new Date(d.getTime() - d.getTimezoneOffset() * 60000); return z.toISOString().slice(0, 10); }
 function todayISO() { return toISODate(new Date()); }
@@ -45,6 +53,7 @@ export default function ReportsPage() {
   const [movers, setMovers] = useState<MoversItem[]>([]);
   const [retention, setRetention] = useState<Retention | null>(null);
   const [lowTrend, setLowTrend] = useState<LowTrendPoint[]>([]);
+  const [taxReport, setTaxReport] = useState<TaxReport | null>(null);
   const [busy, setBusy] = useState(false);
 
   // Keep deps simple & stable for theme recalculation
@@ -62,11 +71,12 @@ export default function ReportsPage() {
     setBusy(true);
     try {
       const qs = `from=${range.from}&to=${range.to}`;
-      const [ds, mv, re, lt] = await Promise.all([
+      const [ds, mv, re, lt, tx] = await Promise.all([
         fetch(`/api/reports/dead-stock?days=${deadDays}&page=${deadPage}&perPage=${deadPerPage}`).then(r => r.json()),
         fetch(`/api/reports/movers?${qs}`).then(r => r.json()),
         fetch(`/api/reports/customers/retention?${qs}`).then(r => r.json()),
         fetch(`/api/reports/low-stock-trends?${qs}`).then(r => r.json()),
+        fetch(`/api/reports/tax?${qs}`).then(r => r.json()),
       ]);
       setDeadStock(Array.isArray(ds?.items) ? ds.items : []);
       setDeadTotalPages(Number(ds?.totalPages || 1));
@@ -81,6 +91,14 @@ export default function ReportsPage() {
       setMovers(mvItems);
       setRetention(re ?? null);
       setLowTrend(Array.isArray(lt?.items) ? lt.items : []);
+      if (tx?.ok) {
+        setTaxReport({
+          summary: tx.summary,
+          months: Array.isArray(tx.months) ? tx.months : [],
+          from: tx.from,
+          to: tx.to,
+        });
+      }
     } catch (e) {
       // non-fatal UI: keep previous state visible
       console.error('Failed to load reports:', e);
@@ -113,6 +131,10 @@ export default function ReportsPage() {
     const neu = retention?.new_count || 0;
     return { totalQty, totalRevenue, deadCount, rep, neu };
   }, [movers, deadStock, retention]);
+
+  const taxSummary = taxReport?.summary;
+  const taxStatusLabel = taxSummary?.status === "Payable" ? "GST Payable" : "ITC Credit";
+  const taxStatusColor = taxSummary?.status === "Payable" ? theme.warning : theme.success;
 
   return (
     <div>
@@ -174,6 +196,38 @@ export default function ReportsPage() {
           <div className="card" style={{ padding:12 }}>
             <div className="muted">Repeat vs New</div>
             <b style={{ fontSize:20 }}>{totals.rep} / {totals.neu}</b>
+          </div>
+        </div>
+
+        {/* Tax summary */}
+        <div className="card" style={{ padding:12, marginTop:12 }}>
+          <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', gap:12, flexWrap:'wrap' }}>
+            <div>
+              <h3 style={{ marginTop:0 }}>GST Tax Summary</h3>
+              <div className="muted text-xs">
+                Output GST = tax collected on sales • Input GST = tax paid on purchases (ITC)
+              </div>
+            </div>
+            <button
+              className="btn"
+              onClick={() => window.open(`/reports/tax/print?from=${range.from}&to=${range.to}`, '_blank')}
+            >
+              Print Tax Report
+            </button>
+          </div>
+          <div style={{ display:'grid', gridTemplateColumns:'repeat(3, minmax(0,1fr))', gap:12, marginTop:12 }}>
+            <div className="card" style={{ padding:10 }}>
+              <div className="muted">Output GST (Sales)</div>
+              <b style={{ fontSize:18 }}>{inr(taxSummary?.output_tax || 0)}</b>
+            </div>
+            <div className="card" style={{ padding:10 }}>
+              <div className="muted">Input GST (Purchases / ITC)</div>
+              <b style={{ fontSize:18 }}>{inr(taxSummary?.input_tax || 0)}</b>
+            </div>
+            <div className="card" style={{ padding:10 }}>
+              <div className="muted">{taxStatusLabel}</div>
+              <b style={{ fontSize:18, color: taxStatusColor }}>{inr(Math.abs(taxSummary?.net_tax || 0))}</b>
+            </div>
           </div>
         </div>
 
@@ -256,6 +310,27 @@ export default function ReportsPage() {
                   <Legend />
                   <Line type="monotone" dataKey="low_count" name="Low-stock items sold that day" stroke={theme.danger} />
                 </LineChart>
+              </ResponsiveContainer>
+            </div>
+          </div>
+
+          <div className="card" style={{ padding:12, gridColumn: '1 / -1' }}>
+            <h3 style={{ marginTop:0 }}>GST Computation (Output vs Input)</h3>
+            <div className="muted text-xs" style={{ marginBottom: 6 }}>
+              Net GST = Output − Input (draft purchases are excluded)
+            </div>
+            <div style={{ width:'100%', height:320 }}>
+              <ResponsiveContainer>
+                <ComposedChart data={taxReport?.months || []}>
+                  <CartesianGrid strokeDasharray="3 3" stroke={theme.muted} />
+                  <XAxis dataKey="label" stroke={theme.muted} />
+                  <YAxis stroke={theme.muted} />
+                  <Tooltip />
+                  <Legend />
+                  <Bar dataKey="output_tax" name="Output GST (Sales)" fill={theme.primary} />
+                  <Bar dataKey="input_tax" name="Input GST (Purchases)" fill={theme.warning} />
+                  <Line type="monotone" dataKey="net_tax" name="Net GST" stroke={theme.success} strokeWidth={2} />
+                </ComposedChart>
               </ResponsiveContainer>
             </div>
           </div>
