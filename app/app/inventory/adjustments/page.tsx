@@ -267,7 +267,17 @@ export default function InventoryAdjustmentsPage() {
                 <td className="p-2">{r.reference || "-"}</td>
                 <td className="p-2">{r.lines ?? "-"}</td>
                 <td className="p-2">
-                  <span className={`px-2 py-1 rounded-lg text-xs ${r.status==="draft"?"bg-yellow-100":"bg-green-100"}`}>{r.status}</span>
+                  <span
+                    className={`px-2 py-1 rounded-lg text-xs font-medium ${
+                      r.status === "draft"
+                        ? "bg-amber-100 text-amber-900 dark:bg-amber-500/20 dark:text-amber-200"
+                        : r.status === "reversed"
+                        ? "bg-slate-200 text-slate-800 dark:bg-slate-500/20 dark:text-slate-200"
+                        : "bg-emerald-100 text-emerald-900 dark:bg-emerald-500/20 dark:text-emerald-200"
+                    }`}
+                  >
+                    {r.status}
+                  </span>
                 </td>
                 <td className="p-2 space-x-2">
                   {r.status === "draft" && (

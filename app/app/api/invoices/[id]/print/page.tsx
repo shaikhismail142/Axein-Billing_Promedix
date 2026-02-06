@@ -15,28 +15,79 @@ function fmtDateIST12h(dt: string | Date | null | undefined) {
   return d.toLocaleString("en-IN", { timeZone: "Asia/Kolkata", hour12: true });
 }
 
+const columnCache = new Map<string, Set<string>>();
+async function getColumns(table: string): Promise<Set<string>> {
+  const cached = columnCache.get(table);
+  if (cached) return cached;
+  const r = await pool.query(
+    `SELECT LOWER(column_name) AS col
+     FROM information_schema.columns
+     WHERE table_schema='public' AND table_name=$1`,
+    [table]
+  );
+  const cols = new Set<string>(r.rows.map((x: any) => x.col));
+  columnCache.set(table, cols);
+  return cols;
+}
+
 export default async function PrintInvoice({ params }: { params: { id: string } }) {
   const id = Number(params.id);
 
   const bizRs = await pool.query(`SELECT value_json FROM settings WHERE key='business'`);
   const biz = bizRs.rows?.[0]?.value_json || {};
 
+  const salesCols = await getColumns("sales");
+  const saleItemCols = await getColumns("sale_items");
+  const productCols = await getColumns("products");
+
+  const hasSMeta = salesCols.has("meta");
+  const hasAmountPaid = salesCols.has("amount_paid");
+  const hasPendingAmount = salesCols.has("pending_amount");
+  const hasPaymentStatus = salesCols.has("payment_status");
+  const hasPaymentMethod = salesCols.has("payment_method");
+
+  const isReturnExpr = hasSMeta ? "COALESCE((s.meta->>'is_return')::boolean, false)" : "false";
+  const amountPaidExpr = hasAmountPaid
+    ? "s.amount_paid"
+    : hasSMeta
+    ? "(s.meta->>'amount_paid')::numeric"
+    : "0";
+  const pendingExpr = hasPendingAmount
+    ? "s.pending_amount"
+    : `GREATEST(s.total - COALESCE(${amountPaidExpr}, 0), 0)`;
+  const paymentStatusExpr = hasPaymentStatus
+    ? "NULLIF(s.payment_status,'')"
+    : hasSMeta
+    ? "(s.meta->>'payment_status')"
+    : "NULL";
+  const paymentMethodExpr = hasPaymentMethod
+    ? "NULLIF(s.payment_method,'')"
+    : hasSMeta
+    ? "(s.meta->>'payment_method')"
+    : "NULL";
+  const notesExpr = hasSMeta ? "(s.meta->>'notes')" : "NULL";
+  const termsExpr = hasSMeta ? "(s.meta->>'terms')" : "NULL";
+  const extraLabelExpr = hasSMeta ? "(s.meta->>'extra_label')" : "NULL";
+  const extraAmountExpr = hasSMeta ? "COALESCE((s.meta->>'extra_amount')::numeric, 0)" : "0";
+  const patientExpr = hasSMeta ? "(s.meta->>'patient_name')" : "NULL";
+  const doctorExpr = hasSMeta ? "(s.meta->>'doctor_name')" : "NULL";
+  const dcExpr = salesCols.has("dc_no") ? "s.dc_no" : hasSMeta ? "(s.meta->>'dc_no')" : "NULL";
+
   const saleRs = await pool.query(
     `SELECT s.id, s.invoice_no, s.customer_id, s.subtotal, s.tax_total, s.total,
             s.created_at, s.invoice_date,
-            COALESCE((s.meta->>'is_return')::boolean, false)   AS is_return,
-            COALESCE(s.amount_paid, (s.meta->>'amount_paid')::numeric, 0)     AS amount_paid,
-            COALESCE(s.pending_amount,
-                     GREATEST(s.total - COALESCE(s.amount_paid, (s.meta->>'amount_paid')::numeric, 0), 0)) AS pending_amount,
-            COALESCE(NULLIF(s.payment_status,''), (s.meta->>'payment_status')) AS payment_status,
-            COALESCE(NULLIF(s.payment_method,''), (s.meta->>'payment_method')) AS payment_method,
-            (s.meta->>'notes')                                  AS notes,
-            (s.meta->>'terms')                                  AS terms,
-            (s.meta->>'extra_label')                            AS extra_label,
-            COALESCE((s.meta->>'extra_amount')::numeric, 0)     AS extra_amount,
-            (s.meta->>'patient_name')                            AS patient_name,
-            (s.meta->>'doctor_name')                             AS doctor_name,
-            (s.meta->>'dc_no')                                   AS dc_no,
+            ${isReturnExpr}   AS is_return,
+            COALESCE(${amountPaidExpr}, 0)     AS amount_paid,
+            COALESCE(${pendingExpr}, 0)        AS pending_amount,
+            COALESCE(${paymentStatusExpr}, NULL) AS payment_status,
+            COALESCE(${paymentMethodExpr}, NULL) AS payment_method,
+            ${notesExpr}                                  AS notes,
+            ${termsExpr}                                  AS terms,
+            ${extraLabelExpr}                             AS extra_label,
+            ${extraAmountExpr}                            AS extra_amount,
+            ${patientExpr}                                AS patient_name,
+            ${doctorExpr}                                 AS doctor_name,
+            ${dcExpr}                                     AS dc_no,
             c.name AS customer_name, c.phone AS customer_phone, c.gstin AS customer_gstin, c.address AS customer_address
        FROM sales s
        LEFT JOIN customers c ON c.id = s.customer_id
@@ -53,13 +104,28 @@ export default async function PrintInvoice({ params }: { params: { id: string } 
   }
   const s = saleRs.rows[0] as any;
 
+  const categoryExpr = productCols.has("category")
+    ? "p.category"
+    : productCols.has("meta")
+    ? "p.meta->>'category'"
+    : "NULL";
+  const hsnExpr = productCols.has("hsn_code")
+    ? "p.hsn_code"
+    : productCols.has("hsn")
+    ? "p.hsn"
+    : productCols.has("meta")
+    ? "p.meta->>'hsn_code'"
+    : "NULL";
+  const batchExpr = saleItemCols.has("meta") ? "(si.meta->>'batch_no')" : "NULL";
+  const expExpr = saleItemCols.has("meta") ? "(si.meta->>'exp_date')" : "NULL";
+
   const items = (
     await pool.query(
       `SELECT si.id, si.name, si.gst_slab, si.qty, si.unit_price, si.discount_pct, si.taxable, si.tax, si.total,
-              COALESCE(p.category, p.meta->>'category') AS category,
-              COALESCE(p.hsn_code, p.hsn, p.meta->>'hsn_code') AS hsn_code,
-              (si.meta->>'batch_no') AS batch_no,
-              (si.meta->>'exp_date') AS exp_date
+              ${categoryExpr} AS category,
+              ${hsnExpr} AS hsn_code,
+              ${batchExpr} AS batch_no,
+              ${expExpr} AS exp_date
          FROM sale_items si
          LEFT JOIN products p
            ON p.id = si.product_id
@@ -90,7 +156,9 @@ export default async function PrintInvoice({ params }: { params: { id: string } 
           .header-top { background: #1f4a8f; color: #fff; padding: 18px 20px; display: flex; gap: 16px; justify-content: space-between; align-items: flex-start; }
           .header-title { font-size: 26px; font-weight: 700; letter-spacing: 0.08em; }
           .header-meta { text-align: right; font-size: 12px; line-height: 1.4; }
-          .balance { background: #eef2ff; color: #0b1220; padding: 8px 20px; text-align: right; font-weight: 700; }
+          .balance { display:flex; justify-content:flex-end; align-items:center; gap:8px; padding: 10px 16px; background: #f8fafc; border-top: 1px solid #e5e7eb; }
+          .balance-label { color:#475569; font-weight:600; }
+          .balance-pill { background:#0f172a; color:#fff; padding:6px 12px; border-radius:9999px; font-weight:700; letter-spacing:0.02em; }
           table { width: 100%; border-collapse: collapse; margin-top: 12px; }
           th, td { border-top: 1px solid #e5e7eb; padding: 6px 8px; text-align: left; vertical-align: top; }
           .right { text-align: right; }
@@ -158,7 +226,10 @@ export default async function PrintInvoice({ params }: { params: { id: string } 
               </div>
             </div>
           </div>
-          <div className="balance">Balance Due {inr(balanceDue)}</div>
+          <div className="balance">
+            <span className="balance-label">Balance Due</span>
+            <span className="balance-pill">{inr(balanceDue)}</span>
+          </div>
         </div>
 
         {s.customer_name && (

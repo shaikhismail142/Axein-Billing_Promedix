@@ -15,6 +15,22 @@ export type TaxSummary = {
   status: "Payable" | "Credit";
 };
 
+const columnCache = new Map<string, Set<string>>();
+
+async function getColumns(table: string): Promise<Set<string>> {
+  const cached = columnCache.get(table);
+  if (cached) return cached;
+  const r = await pool.query(
+    `SELECT LOWER(column_name) AS col
+     FROM information_schema.columns
+     WHERE table_schema='public' AND table_name=$1`,
+    [table]
+  );
+  const cols = new Set<string>(r.rows.map((x: any) => x.col));
+  columnCache.set(table, cols);
+  return cols;
+}
+
 function toDate(d: string, endOfDay = false): Date {
   const base = endOfDay ? `${d}T23:59:59.999` : `${d}T00:00:00.000`;
   const dt = new Date(base);
@@ -44,21 +60,45 @@ export async function getTaxReport(
   const group: "month" | "quarter" = opts?.group === "quarter" ? "quarter" : "month";
   const includeDraft = opts?.includeDraft === true;
 
+  const salesCols = await getColumns("sales");
+  const purchaseCols = await getColumns("purchases");
+  const hasSalesMeta = salesCols.has("meta");
+  const hasSalesInvoiceDate = salesCols.has("invoice_date");
+  const hasSalesCreated = salesCols.has("created_at");
+  const hasPurchStatus = purchaseCols.has("status");
+  const hasPurchBill = purchaseCols.has("bill_date");
+  const hasPurchCreated = purchaseCols.has("created_at");
+
   const salesGroupExpr = group === "quarter"
-    ? "date_trunc('quarter', COALESCE(invoice_date, created_at))::date"
-    : "date_trunc('month', COALESCE(invoice_date, created_at))::date";
+    ? `date_trunc('quarter', ${hasSalesInvoiceDate ? "COALESCE(invoice_date, created_at)" : hasSalesCreated ? "created_at" : "now()"})::date`
+    : `date_trunc('month', ${hasSalesInvoiceDate ? "COALESCE(invoice_date, created_at)" : hasSalesCreated ? "created_at" : "now()"})::date`;
 
   const purchaseGroupExpr = group === "quarter"
-    ? "date_trunc('quarter', COALESCE(bill_date, created_at))::date"
-    : "date_trunc('month', COALESCE(bill_date, created_at))::date";
+    ? `date_trunc('quarter', ${hasPurchBill ? "COALESCE(bill_date, created_at)" : hasPurchCreated ? "created_at" : "now()"})::date`
+    : `date_trunc('month', ${hasPurchBill ? "COALESCE(bill_date, created_at)" : hasPurchCreated ? "created_at" : "now()"})::date`;
+
+  const salesDateExpr = hasSalesInvoiceDate
+    ? "COALESCE(invoice_date, created_at)"
+    : hasSalesCreated
+    ? "created_at"
+    : "now()";
+
+  const purchaseDateExpr = hasPurchBill
+    ? "COALESCE(bill_date, created_at)"
+    : hasPurchCreated
+    ? "created_at"
+    : "now()";
+
+  const salesSignExpr = hasSalesMeta
+    ? "CASE WHEN COALESCE((meta->>'is_return')::boolean, false) THEN -1 ELSE 1 END"
+    : "1";
 
   const salesRows = await pool.query(
     `SELECT ${salesGroupExpr} AS period,
-            SUM((CASE WHEN COALESCE((meta->>'is_return')::boolean, false) THEN -1 ELSE 1 END)
-                * COALESCE(tax_total, 0)) AS output_tax
+            SUM((${salesSignExpr}) * COALESCE(tax_total, 0)) AS output_tax
        FROM sales
-      WHERE COALESCE(invoice_date, created_at) >= $1
-        AND COALESCE(invoice_date, created_at) <= $2
+      WHERE ${salesDateExpr} >= $1
+        AND ${salesDateExpr} <= $2
       GROUP BY 1
       ORDER BY 1`,
     [fromDate, toDateVal]
@@ -66,10 +106,10 @@ export async function getTaxReport(
 
   const purchaseRows = await pool.query(
     `SELECT ${purchaseGroupExpr} AS period,
-            SUM(CASE WHEN status='draft' AND $3::boolean = false THEN 0 ELSE COALESCE(tax_total, 0) END) AS input_tax
+            SUM(${hasPurchStatus ? "CASE WHEN status='draft' AND $3::boolean = false THEN 0 ELSE COALESCE(tax_total, 0) END" : "COALESCE(tax_total, 0)"}) AS input_tax
        FROM purchases
-      WHERE COALESCE(bill_date, created_at) >= $1
-        AND COALESCE(bill_date, created_at) <= $2
+      WHERE ${purchaseDateExpr} >= $1
+        AND ${purchaseDateExpr} <= $2
       GROUP BY 1
       ORDER BY 1`,
     [fromDate, toDateVal, includeDraft]

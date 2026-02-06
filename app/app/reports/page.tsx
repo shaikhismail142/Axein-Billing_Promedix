@@ -138,6 +138,9 @@ export default function ReportsPage() {
   const taxSummary = taxReport?.summary;
   const taxStatusLabel = taxSummary?.status === "Payable" ? "GST Payable" : "ITC Credit";
   const taxStatusColor = taxSummary?.status === "Payable" ? theme.warning : theme.success;
+  const taxPrintUrl = `/reports/tax/print?from=${range.from}&to=${range.to}&group=${taxGroup}&includeDraft=${includeDraftPurchases ? 1 : 0}`;
+  const taxCsvUrl = `/api/reports/tax/export?format=csv&from=${range.from}&to=${range.to}&group=${taxGroup}&includeDraft=${includeDraftPurchases ? 1 : 0}`;
+  const taxExcelUrl = `/api/reports/tax/export?format=excel&from=${range.from}&to=${range.to}&group=${taxGroup}&includeDraft=${includeDraftPurchases ? 1 : 0}`;
 
   return (
     <div>
@@ -229,24 +232,9 @@ export default function ReportsPage() {
                 />
                 Include draft purchases
               </label>
-              <button
-                className="btn"
-                onClick={() => window.open(`/reports/tax/print?from=${range.from}&to=${range.to}&group=${taxGroup}&includeDraft=${includeDraftPurchases ? 1 : 0}`, '_blank')}
-              >
-                Print Tax Report
-              </button>
-              <button
-                className="btn"
-                onClick={() => window.open(`/api/reports/tax/export?format=csv&from=${range.from}&to=${range.to}&group=${taxGroup}&includeDraft=${includeDraftPurchases ? 1 : 0}`, '_blank')}
-              >
-                Export CSV
-              </button>
-              <button
-                className="btn"
-                onClick={() => window.open(`/api/reports/tax/export?format=excel&from=${range.from}&to=${range.to}&group=${taxGroup}&includeDraft=${includeDraftPurchases ? 1 : 0}`, '_blank')}
-              >
-                Export Excel
-              </button>
+              <a className="btn" href={taxPrintUrl} target="_blank" rel="noreferrer">Print Tax Report</a>
+              <a className="btn" href={taxCsvUrl}>Export CSV</a>
+              <a className="btn" href={taxExcelUrl}>Export Excel</a>
             </div>
           </div>
           <div style={{ display:'grid', gridTemplateColumns:'repeat(3, minmax(0,1fr))', gap:12, marginTop:12 }}>

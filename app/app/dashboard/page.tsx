@@ -1,8 +1,19 @@
 // app/dashboard/page.tsx
 'use client';
 
-import React, { useEffect, useMemo, useRef, useState, forwardRef } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
+import dynamic from 'next/dynamic';
 import AnalogClockIST from '@/app/components/AnalogClockIST';
+
+const ResponsiveContainer = dynamic(() => import('recharts').then(m => m.ResponsiveContainer), { ssr: false });
+const ComposedChart       = dynamic(() => import('recharts').then(m => m.ComposedChart), { ssr: false });
+const Bar                 = dynamic(() => import('recharts').then(m => m.Bar), { ssr: false });
+const Line                = dynamic(() => import('recharts').then(m => m.Line), { ssr: false });
+const XAxis               = dynamic(() => import('recharts').then(m => m.XAxis), { ssr: false });
+const YAxis               = dynamic(() => import('recharts').then(m => m.YAxis), { ssr: false });
+const Tooltip             = dynamic(() => import('recharts').then(m => m.Tooltip), { ssr: false });
+const CartesianGrid       = dynamic(() => import('recharts').then(m => m.CartesianGrid), { ssr: false });
+const Legend              = dynamic(() => import('recharts').then(m => ({ default: m.Legend as any })), { ssr: false });
 
 type Daily = { day: string; total: number };
 type BreakdownRowRaw = Record<string, unknown>;
@@ -26,20 +37,6 @@ function cssVar(name: string, fallback: string) {
   if (typeof window === 'undefined') return fallback;
   const v = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
   return v || fallback;
-}
-
-/** Nice y-axis scaling */
-function niceMax(v: number) {
-  if (!isFinite(v) || v <= 0) return 1;
-  const pow10 = Math.pow(10, Math.floor(Math.log10(v)));
-  const n = v / pow10;
-  const step = n <= 1 ? 1 : n <= 2 ? 2 : n <= 5 ? 5 : 10;
-  return step * pow10;
-}
-function yTicks(max: number, count = 4) {
-  const top = niceMax(max);
-  const step = top / count;
-  return Array.from({ length: count + 1 }, (_, i) => i * step);
 }
 
 /** Simple 7-day moving average */
@@ -94,10 +91,6 @@ export default function DashboardPage() {
       .catch(() => setData({ daily: [], breakdown: [], today: { sales_total: 0, gross_profit: 0 } }));
   }, [fromISO, toISO]);
 
-  const lineRef = useRef<HTMLCanvasElement>(null);
-  const pieRef = useRef<HTMLCanvasElement>(null);
-  const [hoverIdx, setHoverIdx] = useState<number | null>(null);
-
   // Derived stats for the range
   const series = data?.daily ?? [];
   const values = series.map((d) => Number(d.total || 0));
@@ -121,14 +114,14 @@ export default function DashboardPage() {
     popText: cssVar('--popover-text', '#fff'),
   }), [depKey]);
 
-  useEffect(() => {
-    if (!data) return;
-    setupLine(lineRef.current, data.daily, hoverIdx, setHoverIdx, theme);
-    const top = [...data.breakdown]
-      .sort((a, b) => (rankMode === 'qty' ? b.qty - a.qty : b.total - a.total))
-      .slice(0, 8);
-    drawPie(pieRef.current, top, theme, rankMode);
-  }, [data, hoverIdx, theme, rankMode]);
+  const chartData = useMemo(() => {
+    const ma = movingAvg(values, 7);
+    return series.map((d, i) => ({
+      day: fmtDateShort(d.day),
+      total: Number(d.total || 0),
+      avg7: i >= 6 ? Number(ma[i - 6]?.toFixed(2) || 0) : null,
+    }));
+  }, [series, values]);
 
   const salesToday = data?.today.sales_total ?? 0;
   const profitToday = data?.today.gross_profit ?? 0;
@@ -232,15 +225,21 @@ export default function DashboardPage() {
           <MiniKPI label="Active days" value={`${activeDays}/${values.length || 0}`} />
         </div>
 
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 340px', gap: 16 }}>
-          <div>
-            <CanvasHiDPI ref={lineRef} width={700} height={340} />
-            <div style={{ marginTop: 8, color: 'var(--muted)' }}>Line: Daily Sales (₹) with 7-day avg & tooltip</div>
-          </div>
-          <div>
-            <CanvasHiDPI ref={pieRef} width={340} height={300} />
-            <div style={{ marginTop: 8, color: 'var(--muted)' }}>Pie: % Share by Product (top 8)</div>
-          </div>
+        <div style={{ width: '100%', height: 340 }}>
+          <ResponsiveContainer>
+            <ComposedChart data={chartData}>
+              <CartesianGrid strokeDasharray="3 3" stroke={theme.border} />
+              <XAxis dataKey="day" stroke={theme.muted} />
+              <YAxis stroke={theme.muted} />
+              <Tooltip />
+              <Legend />
+              <Bar dataKey="total" name="Daily Sales" fill={theme.primary} radius={[6, 6, 0, 0]} />
+              <Line type="monotone" dataKey="avg7" name="7‑day Avg" stroke={theme.success} strokeWidth={2} dot={false} />
+            </ComposedChart>
+          </ResponsiveContainer>
+        </div>
+        <div style={{ marginTop: 8, color: 'var(--muted)' }}>
+          Bars: daily sales amount • Line: 7‑day moving average
         </div>
       </div>
     </div>
@@ -305,231 +304,4 @@ function normalizeBreakdown(j: unknown): BreakdownRow[] {
     qty: Number((r as any).qty ?? (r as any).total_qty ?? (r as any).units ?? 0),
     total: Number((r as any).total ?? (r as any).amount ?? (r as any).sales_total ?? 0),
   }));
-}
-
-/** HiDPI-safe canvas with forwardRef */
-const CanvasHiDPI = forwardRef<HTMLCanvasElement, React.ComponentProps<'canvas'>>(function CanvasHiDPI(props, ref) {
-  const { width = 600, height = 300, ...rest } = props as any;
-  const localRef = useRef<HTMLCanvasElement>(null);
-  useEffect(() => {
-    const canvas = ((ref as React.RefObject<HTMLCanvasElement>)?.current ?? localRef.current) as HTMLCanvasElement | null;
-    if (!canvas) return;
-    const dpr = Math.max(1, window.devicePixelRatio || 1);
-    canvas.style.width = `${width}px`;
-    canvas.style.height = `${height}px`;
-    canvas.width = Math.round(width * dpr);
-    canvas.height = Math.round(height * dpr);
-    const ctx = canvas.getContext('2d');
-    if (ctx) ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  }, [ref, width, height]);
-  return <canvas ref={(ref as any) ?? localRef} {...rest} />;
-});
-
-/** ---- Line chart & pie ---- */
-function setupLine(
-  canvas: HTMLCanvasElement | null,
-  daily: Daily[],
-  _hoverIdx: number | null,
-  setHover: (i: number | null) => void,
-  theme: { text:string; muted:string; primary:string; primary600:string; success:string; border:string; thead:string; popBg:string; popText:string }
-) {
-  if (!canvas) return;
-  const ctx = canvas.getContext('2d');
-  if (!ctx) return;
-
-  const W = (canvas as any).style?.width ? parseInt((canvas as any).style.width, 10) : canvas.width;
-  const H = (canvas as any).style?.height ? parseInt((canvas as any).style.height, 10) : canvas.height;
-
-  const padLeft = 56, padRight = 24, padTop = 16, padBottom = 36;
-  ctx.clearRect(0, 0, W, H);
-
-  const xs = daily.map((d) => d.day);
-  const ys = daily.map((d) => Number(d.total || 0));
-  const N = ys.length || 1;
-
-  // y-scale
-  const yMaxRaw = Math.max(1, ...ys, 0);
-  const yMax = niceMax(yMaxRaw);
-  const yTickVals = yTicks(yMax, 4);
-
-  const plotW = W - padLeft - padRight;
-  const plotH = H - padTop - padBottom;
-
-  const xAt = (i: number) => padLeft + (i * plotW) / Math.max(1, N - 1);
-  const yAt = (v: number) => padTop + (plotH - (v / yMax) * plotH);
-
-  // grid + axes
-  ctx.strokeStyle = theme.border;
-  ctx.lineWidth = 1;
-  yTickVals.forEach((t) => {
-    const y = yAt(t);
-    ctx.beginPath(); ctx.moveTo(padLeft, y); ctx.lineTo(W - padRight, y); ctx.stroke();
-  });
-  ctx.strokeStyle = 'rgba(100,116,139,0.6)';
-  ctx.beginPath(); ctx.moveTo(padLeft, H - padBottom); ctx.lineTo(W - padRight, H - padBottom); ctx.stroke();
-  ctx.beginPath(); ctx.moveTo(padLeft, padTop); ctx.lineTo(padLeft, H - padBottom); ctx.stroke();
-
-  // y tick labels
-  ctx.fillStyle = theme.muted;
-  ctx.font = '12px system-ui';
-  ctx.textAlign = 'right';
-  ctx.textBaseline = 'middle';
-  yTickVals.forEach((t) => ctx.fillText('₹' + fmtINRCompact(t), padLeft - 8, yAt(t)));
-
-  // x labels
-  const xLabelIdxs = N <= 3 ? [...Array(N).keys()] : [0, Math.floor((N - 1) / 2), N - 1];
-  ctx.textAlign = 'center';
-  ctx.textBaseline = 'top';
-  ctx.fillStyle = theme.muted;
-  xLabelIdxs.forEach((i) => ctx.fillText(fmtDateShort(xs[i]), xAt(i), H - padBottom + 6));
-
-  // area under curve
-  ctx.beginPath();
-  ys.forEach((y, i) => { const X = xAt(i), Y = yAt(y); if (i === 0) ctx.moveTo(X, Y); else ctx.lineTo(X, Y); });
-  ctx.lineTo(xAt(N - 1), H - padBottom);
-  ctx.lineTo(xAt(0), H - padBottom);
-  ctx.closePath();
-  const g = ctx.createLinearGradient(0, padTop, 0, H - padBottom);
-  g.addColorStop(0, `${theme.primary}2E`);
-  g.addColorStop(1, `${theme.primary}05`);
-  ctx.fillStyle = g; ctx.fill();
-
-  // main line
-  ctx.beginPath();
-  ys.forEach((y, i) => { const X = xAt(i), Y = yAt(y); if (i === 0) ctx.moveTo(X, Y); else ctx.lineTo(X, Y); });
-  ctx.strokeStyle = theme.primary; ctx.lineWidth = 2; ctx.stroke();
-
-  // points
-  ctx.fillStyle = theme.primary;
-  ys.forEach((y, i) => { const X = xAt(i), Y = yAt(y); ctx.beginPath(); ctx.arc(X, Y, 2.5, 0, Math.PI * 2); ctx.fill(); });
-
-  // moving average (7)
-  const ma = movingAvg(ys, 7);
-  if (ma.length) {
-    ctx.beginPath();
-    for (let i = 0; i < ma.length; i++) {
-      const X = xAt(i + 6), Y = yAt(ma[i]);
-      if (i === 0) ctx.moveTo(X, Y); else ctx.lineTo(X, Y);
-    }
-    ctx.strokeStyle = cssVar('--success', '#22c55e'); ctx.lineWidth = 2; ctx.setLineDash([5, 4]); ctx.stroke(); ctx.setLineDash([]);
-  }
-
-  // last-day label & peak marker
-  if (N > 0) {
-    const lastX = xAt(N - 1), lastY = yAt(ys[N - 1]);
-    labelBubble(ctx, `₹${Number(ys[N - 1]).toFixed(0)}`, lastX, lastY - 10, 'right', { popBg: theme.popBg, popText: theme.popText });
-    const peakIdx = ys.indexOf(Math.max(...ys));
-    const peakX = xAt(peakIdx), peakY = yAt(ys[peakIdx]);
-    ctx.fillStyle = theme.text; (ctx as any).globalAlpha = 0.08; ctx.beginPath(); ctx.arc(peakX, peakY, 10, 0, Math.PI * 2); ctx.fill(); (ctx as any).globalAlpha = 1;
-  }
-
-  // hover interactions
-  function onMove(ev: MouseEvent) {
-    const rect = canvas.getBoundingClientRect();
-    const mx = ev.clientX - rect.left;
-    let nearest = 0, best = Infinity;
-    for (let i = 0; i < N; i++) {
-      const dx = Math.abs(mx - xAt(i));
-      if (dx < best) { best = dx; nearest = i; }
-    }
-    setHover(nearest);
-    ctx.clearRect(0, 0, W, H);
-    setupLine(canvas, daily, null, setHover, theme); // base
-    const X = xAt(nearest), Y = yAt(ys[nearest]);
-    ctx.strokeStyle = 'rgba(148,163,184,0.35)'; ctx.setLineDash([4,3]);
-    ctx.beginPath(); ctx.moveTo(X, padTop); ctx.lineTo(X, H - padBottom); ctx.stroke(); ctx.setLineDash([]);
-    ctx.fillStyle = theme.primary; ctx.beginPath(); ctx.arc(X, Y, 4, 0, Math.PI * 2); ctx.fill();
-    labelBubble(ctx, `${fmtDateShort(xs[nearest])} • ₹${Number(ys[nearest]).toFixed(2)}`, X, Y - 14, 'auto', { popBg: theme.popBg, popText: theme.popText });
-  }
-  function onLeave() { setHover(null); ctx.clearRect(0, 0, W, H); setupLine(canvas, daily, null, setHover, theme); }
-
-  canvas.onmousemove = onMove;
-  canvas.onmouseleave = onLeave;
-}
-
-function labelBubble(
-  ctx: CanvasRenderingContext2D,
-  text: string,
-  x: number,
-  y: number,
-  align: 'left' | 'right' | 'auto' = 'auto',
-  theme: { popBg:string; popText:string }
-) {
-  ctx.font = '12px system-ui';
-  const pad = 6;
-  const m = ctx.measureText(text);
-  const w = m.width + pad * 2;
-  const h = 22;
-  let bx = x - w / 2;
-  const by = y - h - 6;
-  if (align === 'left') bx = x - w;
-  else if (align === 'right') bx = x - w + 2;
-
-  ctx.fillStyle = theme.popBg;
-  ctx.beginPath();
-  if ((ctx as any).roundRect) (ctx as any).roundRect(bx, by, w, h, 6);
-  else ctx.rect(bx, by, w, h);
-  ctx.fill();
-
-  ctx.fillStyle = theme.popText;
-  ctx.textAlign = 'center';
-  ctx.textBaseline = 'middle';
-  ctx.fillText(text, bx + w / 2, by + h / 2 + 0.5);
-}
-
-function ellipsize(label: string, max = 24) { const s = String(label ?? ''); return s.length > max ? s.slice(0, max - 1) + '…' : s; }
-
-function drawPie(
-  canvas: HTMLCanvasElement | null,
-  rows: BreakdownRow[],
-  theme: { text:string; muted:string; primary:string; primary600:string },
-  mode: TopMode
-) {
-  if (!canvas) return;
-  const ctx = canvas.getContext('2d'); if (!ctx) return;
-
-  const W = (canvas as any).style?.width ? parseInt((canvas as any).style.width, 10) : canvas.width;
-  const H = (canvas as any).style?.height ? parseInt((canvas as any).style.height, 10) : canvas.height;
-  ctx.clearRect(0, 0, W, H);
-
-  const pad = 14, legendW = 152, leftW = W - legendW - pad * 3;
-  const cx = pad + leftW / 2, cy = H / 2, r = Math.min(leftW / 2 - 4, H / 2 - 20);
-
-  const qtyVals = rows.map((r) => r.qty || 0);
-  const vals = (mode === 'qty' ? qtyVals : rows.map(r => r.total || 0));
-  const total = vals.reduce((a, b) => a + b, 0);
-
-  if (!total) {
-    ctx.fillStyle = cssVar('--muted', '#64748b'); ctx.font = '14px system-ui'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-    ctx.fillText('No data', cx, cy); return;
-  }
-
-  const colors = [
-    cssVar('--primary', '#3b82f6'),
-    cssVar('--success', '#22c55e'),
-    '#f59e0b', '#ef4444', '#8b5cf6', '#06b6d4', '#84cc16', '#ec4899',
-  ];
-
-  let a0 = -Math.PI / 2;
-  rows.forEach((row, i) => {
-    const frac = vals[i] / total; if (!isFinite(frac) || frac <= 0) return;
-    const a1 = a0 + frac * Math.PI * 2;
-    ctx.beginPath(); ctx.moveTo(cx, cy); ctx.arc(cx, cy, r, a0, a1); ctx.closePath();
-    ctx.fillStyle = colors[i % colors.length]; ctx.fill();
-    ctx.strokeStyle = 'rgba(17,24,39,0.06)'; ctx.lineWidth = 1; ctx.stroke();
-    a0 = a1;
-  });
-
-  const legendX = pad + leftW + pad; let y = 20;
-  ctx.font = '12px system-ui';
-  rows.forEach((row, i) => {
-    const frac = vals[i] / total; if (frac <= 0) return;
-    const pct = (frac * 100).toFixed(1) + '%';
-    ctx.fillStyle = colors[i % colors.length]; ctx.fillRect(legendX, y - 9, 10, 10);
-    ctx.fillStyle = cssVar('--text', '#111827');
-    const label = `${ellipsize(row.name)} — ${pct}`;
-    ctx.save(); ctx.beginPath(); ctx.rect(legendX + 16, y - 12, legendW - 24, 18); ctx.clip();
-    ctx.fillText(label, legendX + 16, y); ctx.restore();
-    y += 18;
-  });
 }

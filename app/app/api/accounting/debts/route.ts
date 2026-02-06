@@ -34,6 +34,8 @@ export async function GET(_req: NextRequest) {
   try {
     const pCols = await getColumns(client, "purchases");
     const sCols = await getColumns(client, "sales");
+    const hasPMeta = pCols.has("meta");
+    const hasPStatus = pCols.has("status");
 
     const totalExpr = pCols.has("grand_total")
       ? "p.grand_total"
@@ -42,7 +44,9 @@ export async function GET(_req: NextRequest) {
       : "0";
     const paidExpr = pCols.has("amount_paid")
       ? "p.amount_paid"
-      : "COALESCE((p.meta->>'amount_paid')::numeric, 0)";
+      : hasPMeta
+      ? "COALESCE((p.meta->>'amount_paid')::numeric, 0)"
+      : "0";
     const pendingExpr = pCols.has("pending_amount")
       ? "p.pending_amount"
       : `GREATEST(${totalExpr} - ${paidExpr}, 0)`;
@@ -56,13 +60,20 @@ export async function GET(_req: NextRequest) {
       : pCols.has("bill_no")
       ? "p.bill_no"
       : "NULL";
+    const vendorKeyExpr = hasPMeta
+      ? "COALESCE(CAST(p.supplier_id AS TEXT), COALESCE(p.meta->>'vendor_name', 'unknown'))"
+      : "COALESCE(CAST(p.supplier_id AS TEXT), 'unknown')";
+    const vendorNameExpr = hasPMeta
+      ? "COALESCE(sup.name, p.meta->>'vendor_name', 'Unknown')"
+      : "COALESCE(sup.name, 'Unknown')";
+    const statusFilter = hasPStatus ? "AND p.status <> 'draft'" : "";
 
     const rows = (
       await client.query(
         `
         SELECT
-          COALESCE(CAST(p.supplier_id AS TEXT), COALESCE(p.meta->>'vendor_name', 'unknown')) AS vendor_key,
-          COALESCE(sup.name, p.meta->>'vendor_name', 'Unknown') AS vendor_name,
+          ${vendorKeyExpr} AS vendor_key,
+          ${vendorNameExpr} AS vendor_name,
           p.supplier_id AS supplier_id,
           p.id AS bill_id,
           ${billNoExpr} AS bill_no,
@@ -72,6 +83,8 @@ export async function GET(_req: NextRequest) {
           COALESCE(${pendingExpr}, 0) AS pending
         FROM purchases p
         LEFT JOIN suppliers sup ON sup.id = p.supplier_id
+        WHERE COALESCE(${pendingExpr}, 0) > 0
+        ${statusFilter}
         ORDER BY ${billDateExpr} DESC NULLS LAST
         `
       )
@@ -139,10 +152,13 @@ export async function GET(_req: NextRequest) {
     vendors.sort((a, b) => b.outstanding - a.outstanding);
 
     // Receivables (sales pending)
+    const hasSMeta = sCols.has("meta");
     const salesTotalExpr = sCols.has("total") ? "s.total" : "0";
     const salesPaidExpr = sCols.has("amount_paid")
       ? "s.amount_paid"
-      : "COALESCE((s.meta->>'amount_paid')::numeric, 0)";
+      : hasSMeta
+      ? "COALESCE((s.meta->>'amount_paid')::numeric, 0)"
+      : "0";
     const salesPendingExpr = sCols.has("pending_amount")
       ? "s.pending_amount"
       : `GREATEST(${salesTotalExpr} - ${salesPaidExpr}, 0)`;
@@ -171,4 +187,3 @@ export async function GET(_req: NextRequest) {
     client.release();
   }
 }
-

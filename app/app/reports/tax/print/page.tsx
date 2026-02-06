@@ -53,7 +53,17 @@ export default async function TaxPrintPage({
       </head>
       <body>
         <div className="noprint" style={{ marginBottom: 12 }}>
-          <button onClick={() => window.print()} style={{ border: "1px solid #e5e7eb", padding: "6px 10px", borderRadius: 6 }}>Print</button>
+          <button id="printBtn" style={{ border: "1px solid #e5e7eb", padding: "6px 10px", borderRadius: 6 }}>Print</button>
+          <script
+            dangerouslySetInnerHTML={{
+              __html: `
+                addEventListener('load', () => {
+                  const b = document.getElementById('printBtn');
+                  if (b) b.addEventListener('click', () => window.print());
+                });
+              `,
+            }}
+          />
         </div>
 
         <div className="header">

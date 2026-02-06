@@ -27,6 +27,23 @@ type ReqBody = {
   dc_no?: string | null;
 };
 
+const columnCache = new Map<string, Set<string>>();
+async function getColumns(client: any, table: string): Promise<Set<string>> {
+  const cached = columnCache.get(table);
+  if (cached) return cached;
+  const r = await client.query(
+    `SELECT LOWER(column_name) AS col
+     FROM information_schema.columns
+     WHERE table_schema='public' AND table_name=$1`,
+    [table]
+  );
+  const cols = new Set<string>(r.rows.map((x: any) => x.col));
+  columnCache.set(table, cols);
+  return cols;
+}
+
+type ProductCols = { hasMeta: boolean; hasStockQty: boolean; hasStock: boolean };
+
 export async function PUT(req: Request, { params }: { params: { id: string } }) {
   const saleId = Number(params.id);
   if (!Number.isFinite(saleId)) return NextResponse.json({ error: "Invalid sale id" }, { status: 400 });
@@ -41,15 +58,33 @@ export async function PUT(req: Request, { params }: { params: { id: string } }) 
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
+    const salesCols = await getColumns(client, "sales");
+    const saleItemCols = await getColumns(client, "sale_items");
+    const productCols = await getColumns(client, "products");
+    const prodCols: ProductCols = {
+      hasMeta: productCols.has("meta"),
+      hasStockQty: productCols.has("stock_qty"),
+      hasStock: productCols.has("stock"),
+    };
+    const salesHasMeta = salesCols.has("meta");
 
     // Read current for stock diff + meta
-    const curSale = await client.query(`SELECT id, meta FROM sales WHERE id=$1 FOR UPDATE`, [saleId]);
+    const curSelectCols = ["id"];
+    if (salesHasMeta) curSelectCols.push("meta");
+    if (salesCols.has("amount_paid")) curSelectCols.push("amount_paid");
+    if (salesCols.has("payment_method")) curSelectCols.push("payment_method");
+    if (salesCols.has("payment_status")) curSelectCols.push("payment_status");
+    const curSale = await client.query(
+      `SELECT ${curSelectCols.join(", ")} FROM sales WHERE id=$1 FOR UPDATE`,
+      [saleId]
+    );
     if (!curSale.rowCount) {
       await client.query("ROLLBACK");
       return NextResponse.json({ error: "Invoice not found" }, { status: 404 });
     }
-    const curMeta = (curSale.rows[0].meta ?? {}) as Record<string, any>;
-    const prevIsReturn = !!curMeta.is_return;
+    const curRow = curSale.rows[0] as any;
+    const curMeta = salesHasMeta ? ((curRow.meta ?? {}) as Record<string, any>) : {};
+    const prevIsReturn = salesHasMeta ? !!curMeta.is_return : false;
 
     const prevItems = await client.query(
       `SELECT name, qty FROM sale_items WHERE sale_id=$1`,
@@ -58,7 +93,7 @@ export async function PUT(req: Request, { params }: { params: { id: string } }) 
 
     // Undo previous stock effects
     for (const row of prevItems.rows) {
-      await adjustStockForItem(client, { name: row.name }, Number(row.qty), prevIsReturn ? -1 : +1);
+      await adjustStockForItem(client, { name: row.name }, Number(row.qty), prevIsReturn ? -1 : +1, prodCols);
     }
 
     // Replace items
@@ -86,55 +121,60 @@ export async function PUT(req: Request, { params }: { params: { id: string } }) 
         ...(it.batch_no ? { batch_no: String(it.batch_no).trim() } : {}),
         ...(it.exp_date ? { exp_date: String(it.exp_date).trim() } : {}),
       };
-      await client.query(
-        `INSERT INTO sale_items (sale_id, product_id, name, gst_slab, qty, unit_price, discount_pct, taxable, tax, total, meta)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
-        [saleId, it.product_id ?? null, it.name.trim(), gst, qty, rate, disc, round2(taxable), round2(tax), round2(lineTotal), JSON.stringify(itemMeta)]
-      );
+      if (saleItemCols.has("meta")) {
+        await client.query(
+          `INSERT INTO sale_items (sale_id, product_id, name, gst_slab, qty, unit_price, discount_pct, taxable, tax, total, meta)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
+          [saleId, it.product_id ?? null, it.name.trim(), gst, qty, rate, disc, round2(taxable), round2(tax), round2(lineTotal), JSON.stringify(itemMeta)]
+        );
+      } else {
+        await client.query(
+          `INSERT INTO sale_items (sale_id, product_id, name, gst_slab, qty, unit_price, discount_pct, taxable, tax, total)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+          [saleId, it.product_id ?? null, it.name.trim(), gst, qty, rate, disc, round2(taxable), round2(tax), round2(lineTotal)]
+        );
+      }
 
       // Apply new stock effects
       const nextIsReturn = !!body.is_return;
-      await adjustStockForItem(client, { product_id: it.product_id, name: it.name }, qty, nextIsReturn ? +1 : -1);
+      await adjustStockForItem(client, { product_id: it.product_id, name: it.name }, qty, nextIsReturn ? +1 : -1, prodCols);
     }
 
     // Totals + meta
     if (body.is_return) { subtotal = -subtotal; tax_total = -tax_total; total = -total; }
-    const amountPaid = round2(Number(body.amount_paid ?? (curMeta.amount_paid ?? 0) ?? 0));
+    const existingPaid = salesCols.has("amount_paid")
+      ? Number(curRow.amount_paid ?? 0)
+      : Number(curMeta.amount_paid ?? 0);
+    const amountPaid = round2(Number(body.amount_paid ?? existingPaid ?? 0));
     const paid = Math.max(amountPaid, 0);
     const pendingAmount = round2(Math.max(total - paid, 0));
     const paymentStatus =
       paid >= total - 0.01 ? "Paid" : paid > 0 ? "Partial" : "Pending";
+    const existingMethod = salesCols.has("payment_method")
+      ? (curRow.payment_method ?? null)
+      : (curMeta.payment_method ?? null);
     const paymentMethod =
       typeof body.payment_method === "string"
         ? body.payment_method.trim()
-        : (curMeta.payment_method ?? null);
+        : existingMethod;
 
-    // Try update with payment columns; fallback if columns missing
-    try {
-      await client.query(
-        `UPDATE sales SET subtotal=$2, tax_total=$3, total=$4, customer_id=$5,
-                          amount_paid=$6, pending_amount=$7, payment_status=$8, payment_method=$9
-          WHERE id=$1`,
-        [
-          saleId,
-          round2(subtotal),
-          round2(tax_total),
-          round2(total),
-          await resolveCustomerId(client, body),
-          paid,
-          pendingAmount,
-          paymentStatus,
-          paymentMethod || null,
-        ]
-      );
-    } catch {
-      await client.query(
-        `UPDATE sales SET subtotal=$2, tax_total=$3, total=$4, customer_id=$5
-          WHERE id=$1`,
-        [saleId, round2(subtotal), round2(tax_total), round2(total),
-         await resolveCustomerId(client, body)]
-      );
-    }
+    const updateCols: string[] = ["subtotal=$2", "tax_total=$3", "total=$4", "customer_id=$5"];
+    const updateVals: any[] = [
+      saleId,
+      round2(subtotal),
+      round2(tax_total),
+      round2(total),
+      await resolveCustomerId(client, body),
+    ];
+    let idx = 6;
+    if (salesCols.has("amount_paid")) { updateCols.push(`amount_paid=$${idx++}`); updateVals.push(paid); }
+    if (salesCols.has("pending_amount")) { updateCols.push(`pending_amount=$${idx++}`); updateVals.push(pendingAmount); }
+    if (salesCols.has("payment_status")) { updateCols.push(`payment_status=$${idx++}`); updateVals.push(paymentStatus); }
+    if (salesCols.has("payment_method")) { updateCols.push(`payment_method=$${idx++}`); updateVals.push(paymentMethod || null); }
+    await client.query(
+      `UPDATE sales SET ${updateCols.join(", ")} WHERE id=$1`,
+      updateVals
+    );
 
     const newMeta = {
       ...(curMeta || {}),
@@ -151,10 +191,12 @@ export async function PUT(req: Request, { params }: { params: { id: string } }) 
       dc_no: typeof body.dc_no === 'string' ? body.dc_no : (curMeta.dc_no ?? null),
     };
 
-    await client.query(
-      `UPDATE sales SET meta=$2::jsonb WHERE id=$1`,
-      [saleId, JSON.stringify(newMeta)]
-    );
+    if (salesHasMeta) {
+      await client.query(
+        `UPDATE sales SET meta=$2::jsonb WHERE id=$1`,
+        [saleId, JSON.stringify(newMeta)]
+      );
+    }
 
     // Optional: refresh sale_payments (single row)
     try {
@@ -199,25 +241,56 @@ async function resolveCustomerId(client: any, body: { customer_id?: number|null;
   return ins.rows[0].id as number;
 }
 
-async function adjustStockForItem(client: any, product: { product_id?: number; name: string }, qty: number, direction: 1|-1) {
+async function adjustStockForItem(
+  client: any,
+  product: { product_id?: number; name: string },
+  qty: number,
+  direction: 1|-1,
+  cols: ProductCols
+) {
   try {
     let prod = null;
     if (product.product_id) {
-      const r = await client.query(`SELECT id, meta FROM products WHERE id=$1`, [product.product_id]);
+      const selectCols = ["id"];
+      if (cols.hasMeta) selectCols.push("meta");
+      if (cols.hasStockQty) selectCols.push("stock_qty");
+      if (cols.hasStock) selectCols.push("stock");
+      const r = await client.query(`SELECT ${selectCols.join(", ")} FROM products WHERE id=$1`, [product.product_id]);
       if (r.rowCount) prod = r.rows[0];
     }
     if (!prod) {
-      const r = await client.query(`SELECT id, meta FROM products WHERE LOWER(name)=LOWER($1) LIMIT 1`, [product.name.trim()]);
+      const selectCols = ["id"];
+      if (cols.hasMeta) selectCols.push("meta");
+      if (cols.hasStockQty) selectCols.push("stock_qty");
+      if (cols.hasStock) selectCols.push("stock");
+      const r = await client.query(`SELECT ${selectCols.join(", ")} FROM products WHERE LOWER(name)=LOWER($1) LIMIT 1`, [product.name.trim()]);
       if (r.rowCount) prod = r.rows[0];
     }
     if (!prod) {
-      const ins = await client.query(`INSERT INTO products (name, meta) VALUES ($1,'{}'::jsonb) RETURNING id, meta`, [product.name.trim()]);
-      prod = ins.rows[0];
+      if (cols.hasMeta) {
+        const ins = await client.query(`INSERT INTO products (name, meta) VALUES ($1,'{}'::jsonb) RETURNING id, meta`, [product.name.trim()]);
+        prod = ins.rows[0];
+      } else {
+        const ins = await client.query(`INSERT INTO products (name) VALUES ($1) RETURNING id`, [product.name.trim()]);
+        prod = ins.rows[0];
+      }
     }
-    const current = Number((prod.meta?.stock_qty ?? 0));
+    const current = cols.hasMeta
+      ? Number((prod.meta?.stock_qty ?? 0))
+      : cols.hasStockQty
+      ? Number(prod.stock_qty ?? 0)
+      : cols.hasStock
+      ? Number(prod.stock ?? 0)
+      : 0;
     const next = current + (direction * qty);
-    const newMeta = { ...(prod.meta || {}), stock_qty: round2(next) };
-    await client.query(`UPDATE products SET meta=$2::jsonb WHERE id=$1`, [prod.id, JSON.stringify(newMeta)]);
+    if (cols.hasMeta) {
+      const newMeta = { ...(prod.meta || {}), stock_qty: round2(next) };
+      await client.query(`UPDATE products SET meta=$2::jsonb WHERE id=$1`, [prod.id, JSON.stringify(newMeta)]);
+    } else if (cols.hasStockQty) {
+      await client.query(`UPDATE products SET stock_qty=$2 WHERE id=$1`, [prod.id, round2(next)]);
+    } else if (cols.hasStock) {
+      await client.query(`UPDATE products SET stock=$2 WHERE id=$1`, [prod.id, round2(next)]);
+    }
   } catch { /* swallow if no products table */ }
 }
 

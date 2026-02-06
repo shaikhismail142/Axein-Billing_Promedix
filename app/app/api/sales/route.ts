@@ -80,6 +80,23 @@ function currentFYLabel(d = nowIST()): string {
   return `FY${a}-${b}`;
 }
 
+const columnCache = new Map<string, Set<string>>();
+async function getColumns(client: any, table: string): Promise<Set<string>> {
+  const cached = columnCache.get(table);
+  if (cached) return cached;
+  const r = await client.query(
+    `SELECT LOWER(column_name) AS col
+     FROM information_schema.columns
+     WHERE table_schema='public' AND table_name=$1`,
+    [table]
+  );
+  const cols = new Set<string>(r.rows.map((x: any) => x.col));
+  columnCache.set(table, cols);
+  return cols;
+}
+
+type ProductCols = { hasMeta: boolean; hasStockQty: boolean; hasStock: boolean };
+
 async function getNextInvoiceNo(client: any): Promise<string> {
   const prefix = `${currentFYLabel()}/`;
   const rs = await client.query(
@@ -99,7 +116,12 @@ async function getNextInvoiceNo(client: any): Promise<string> {
   return `${prefix}${String(seq).padStart(5, "0")}`;
 }
 
-async function getNextDcNo(client: any, companyName: string, baseDate?: Date): Promise<string> {
+async function getNextDcNo(
+  client: any,
+  companyName: string,
+  baseDate: Date | undefined,
+  salesCols: Set<string>
+): Promise<string> {
   const safeCompany = (companyName || "Company")
     .trim()
     .replace(/[\/]+/g, "-")
@@ -107,22 +129,45 @@ async function getNextDcNo(client: any, companyName: string, baseDate?: Date): P
     .replace(/[^a-zA-Z0-9_-]/g, "");
   const { ymd, hm } = fmtISTParts(baseDate || new Date());
   const prefix = `DC/${safeCompany}/${ymd}/`;
-
-  const rs = await client.query(
-    `SELECT meta->>'dc_no' AS dc_no
-       FROM sales
-      WHERE (meta->>'dc_no') LIKE $1
-      ORDER BY id DESC
-      LIMIT 1`,
-    [prefix + "%"]
-  );
-  let seq = 1;
-  if (rs.rowCount > 0) {
-    const last = String(rs.rows[0]?.dc_no || "");
-    const m = last.match(/-(\d+)\s*$/);
-    if (m) seq = Number(m[1]) + 1;
+  try {
+    if (salesCols.has("dc_no")) {
+      const rs = await client.query(
+        `SELECT dc_no
+           FROM sales
+          WHERE dc_no LIKE $1
+          ORDER BY id DESC
+          LIMIT 1`,
+        [prefix + "%"]
+      );
+      let seq = 1;
+      if (rs.rowCount > 0) {
+        const last = String(rs.rows[0]?.dc_no || "");
+        const m = last.match(/-(\d+)\s*$/);
+        if (m) seq = Number(m[1]) + 1;
+      }
+      return `${prefix}${hm}-${String(seq).padStart(3, "0")}`;
+    }
+    if (salesCols.has("meta")) {
+      const rs = await client.query(
+        `SELECT meta->>'dc_no' AS dc_no
+           FROM sales
+          WHERE (meta->>'dc_no') LIKE $1
+          ORDER BY id DESC
+          LIMIT 1`,
+        [prefix + "%"]
+      );
+      let seq = 1;
+      if (rs.rowCount > 0) {
+        const last = String(rs.rows[0]?.dc_no || "");
+        const m = last.match(/-(\d+)\s*$/);
+        if (m) seq = Number(m[1]) + 1;
+      }
+      return `${prefix}${hm}-${String(seq).padStart(3, "0")}`;
+    }
+  } catch {
+    // ignore and fall back
   }
-  return `${prefix}${hm}-${String(seq).padStart(3, "0")}`;
+  return `${prefix}${hm}-${String(1).padStart(3, "0")}`;
 }
 
 async function resolveCustomerId(client: any, payload: NewSaleBody): Promise<number | null> {
@@ -155,24 +200,38 @@ async function resolveCustomerId(client: any, payload: NewSaleBody): Promise<num
 
 /** ----- Stock helpers ----- **/
 
-async function lockAndReadProductById(client: any, id: number) {
+async function lockAndReadProductById(client: any, id: number, cols: ProductCols) {
+  const selectCols = ["id"];
+  if (cols.hasMeta) selectCols.push("meta");
+  if (cols.hasStockQty) selectCols.push("stock_qty");
+  if (cols.hasStock) selectCols.push("stock");
   const rs = await client.query(
-    `SELECT id, meta
+    `SELECT ${selectCols.join(", ")}
        FROM products
       WHERE id = $1
       FOR UPDATE`,
     [id]
   );
   if (rs.rowCount === 0) return null;
-  const row = rs.rows[0] as { id: number; meta: any };
-  const meta = row.meta || {};
-  const current = Number(meta.stock_qty ?? meta.stock ?? 0) || 0;
+  const row = rs.rows[0] as any;
+  const meta = cols.hasMeta ? (row.meta || {}) : {};
+  const current = cols.hasMeta
+    ? Number(meta.stock_qty ?? meta.stock ?? 0) || 0
+    : cols.hasStockQty
+    ? Number(row.stock_qty ?? 0) || 0
+    : cols.hasStock
+    ? Number(row.stock ?? 0) || 0
+    : 0;
   return { id: row.id, meta, current };
 }
 
-async function lockAndReadProductByName(client: any, productName: string) {
+async function lockAndReadProductByName(client: any, productName: string, cols: ProductCols) {
+  const selectCols = ["id"];
+  if (cols.hasMeta) selectCols.push("meta");
+  if (cols.hasStockQty) selectCols.push("stock_qty");
+  if (cols.hasStock) selectCols.push("stock");
   const rs = await client.query(
-    `SELECT id, meta
+    `SELECT ${selectCols.join(", ")}
        FROM products
       WHERE lower(name) = lower($1)
       FOR UPDATE
@@ -180,9 +239,15 @@ async function lockAndReadProductByName(client: any, productName: string) {
     [productName]
   );
   if (rs.rowCount === 0) return null;
-  const row = rs.rows[0] as { id: number; meta: any };
-  const meta = row.meta || {};
-  const current = Number(meta.stock_qty ?? meta.stock ?? 0) || 0;
+  const row = rs.rows[0] as any;
+  const meta = cols.hasMeta ? (row.meta || {}) : {};
+  const current = cols.hasMeta
+    ? Number(meta.stock_qty ?? meta.stock ?? 0) || 0
+    : cols.hasStockQty
+    ? Number(row.stock_qty ?? 0) || 0
+    : cols.hasStock
+    ? Number(row.stock ?? 0) || 0
+    : 0;
   return { id: row.id, meta, current };
 }
 
@@ -190,14 +255,16 @@ async function applyStockDelta(
   client: any,
   productRef: { id?: number | null; name?: string | null },
   delta: number,
-  allowNegative = false
+  allowNegative = false,
+  cols: ProductCols
 ) {
+  if (!cols.hasMeta && !cols.hasStockQty && !cols.hasStock) return;
   const byId = Number(productRef.id);
   const locked =
     Number.isFinite(byId) && byId > 0
-      ? await lockAndReadProductById(client, byId)
+      ? await lockAndReadProductById(client, byId, cols)
       : productRef.name
-      ? await lockAndReadProductByName(client, String(productRef.name))
+      ? await lockAndReadProductByName(client, String(productRef.name), cols)
       : null;
 
   if (!locked) return;
@@ -206,11 +273,21 @@ async function applyStockDelta(
   let next = current + delta;
   if (!allowNegative) next = Math.max(0, next);
 
-  const nextMeta = { ...meta, stock_qty: next };
-  await client.query(`UPDATE products SET meta = $2::jsonb WHERE id = $1`, [
-    id,
-    JSON.stringify(nextMeta),
-  ]);
+  if (cols.hasMeta) {
+    const nextMeta = { ...meta, stock_qty: next };
+    await client.query(`UPDATE products SET meta = $2::jsonb WHERE id = $1`, [
+      id,
+      JSON.stringify(nextMeta),
+    ]);
+    return;
+  }
+  if (cols.hasStockQty) {
+    await client.query(`UPDATE products SET stock_qty = $2 WHERE id = $1`, [id, next]);
+    return;
+  }
+  if (cols.hasStock) {
+    await client.query(`UPDATE products SET stock = $2 WHERE id = $1`, [id, next]);
+  }
 }
 
 /** -------- Main handler ---------- */
@@ -319,6 +396,14 @@ export async function POST(req: Request) {
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
+    const salesCols = await getColumns(client, "sales");
+    const saleItemCols = await getColumns(client, "sale_items");
+    const productCols = await getColumns(client, "products");
+    const prodCols: ProductCols = {
+      hasMeta: productCols.has("meta"),
+      hasStockQty: productCols.has("stock_qty"),
+      hasStock: productCols.has("stock"),
+    };
 
     const customer_id = await resolveCustomerId(client, payload);
     const invoiceDateParam =
@@ -328,7 +413,7 @@ export async function POST(req: Request) {
     const invoice_no = await getNextInvoiceNo(client);
     const bizRes = await client.query(`SELECT value_json FROM settings WHERE key='business' LIMIT 1`);
     const biz = (bizRes.rows?.[0]?.value_json ?? {}) as any;
-    const dc_no = await getNextDcNo(client, String(biz?.name || "Company"), invoiceDateParam);
+    const dc_no = await getNextDcNo(client, String(biz?.name || "Company"), invoiceDateParam, salesCols);
 
     // Insert sale (meta kept as JS object to match existing pattern)
     const saleMeta = {
@@ -346,47 +431,29 @@ export async function POST(req: Request) {
       dc_no,
     };
 
-    let saleIns;
-    try {
-      saleIns = await client.query(
-        `INSERT INTO sales
-           (invoice_no, customer_id, subtotal, tax_total, total, invoice_date,
-            amount_paid, pending_amount, payment_status, payment_method, meta)
-         VALUES ($1,         $2,          $3,       $4,       $5,    $6,
-                $7,         $8,            $9,            $10,            $11)
-         RETURNING id`,
-        [
-          invoice_no,
-          customer_id,
-          subtotal,
-          tax_total,
-          grand_total,
-          invoiceDateParam.toISOString(),
-          paid,
-          pending_amount,
-          payment_status,
-          payment_method,
-          saleMeta,
-        ]
-      );
-    } catch {
-      // Back-compat if columns don't exist
-      saleIns = await client.query(
-        `INSERT INTO sales
-           (invoice_no, customer_id, subtotal, tax_total, total, invoice_date, meta)
-         VALUES ($1,         $2,          $3,       $4,       $5,    $6,           $7)
-         RETURNING id`,
-        [
-          invoice_no,
-          customer_id,
-          subtotal,
-          tax_total,
-          grand_total,
-          invoiceDateParam.toISOString(),
-          saleMeta,
-        ]
-      );
-    }
+    const saleCols: string[] = ["invoice_no", "customer_id", "subtotal", "tax_total", "total"];
+    const saleVals: any[] = [
+      invoice_no,
+      customer_id,
+      subtotal,
+      tax_total,
+      grand_total,
+    ];
+    if (salesCols.has("invoice_date")) { saleCols.push("invoice_date"); saleVals.push(invoiceDateParam.toISOString()); }
+    if (salesCols.has("amount_paid")) { saleCols.push("amount_paid"); saleVals.push(paid); }
+    if (salesCols.has("pending_amount")) { saleCols.push("pending_amount"); saleVals.push(pending_amount); }
+    if (salesCols.has("payment_status")) { saleCols.push("payment_status"); saleVals.push(payment_status); }
+    if (salesCols.has("payment_method")) { saleCols.push("payment_method"); saleVals.push(payment_method); }
+    if (salesCols.has("meta")) { saleCols.push("meta"); saleVals.push(saleMeta); }
+    if (salesCols.has("dc_no")) { saleCols.push("dc_no"); saleVals.push(dc_no); }
+
+    const salePlaceholders = saleVals.map((_, i) => `$${i + 1}`).join(", ");
+    const saleIns = await client.query(
+      `INSERT INTO sales (${saleCols.join(", ")})
+       VALUES (${salePlaceholders})
+       RETURNING id`,
+      saleVals
+    );
     const sale_id = Number(saleIns.rows[0].id);
 
     // Optional: record a payment row
@@ -413,32 +480,54 @@ export async function POST(req: Request) {
         ...(ln.batch_no ? { batch_no: ln.batch_no } : {}),
         ...(ln.exp_date ? { exp_date: ln.exp_date } : {}),
       };
-      await client.query(
-        `INSERT INTO sale_items
-           (sale_id, product_id, name, gst_slab, qty, unit_price, discount_pct, taxable, tax, total, meta)
-         VALUES
-           ($1,      $2,         $3,   $4,       $5,  $6,         $7,            $8,     $9,  $10, $11)`,
-        [
-          sale_id,
-          ln.product_id,
-          ln.name,
-          ln.gst_slab,
-          ln.qty,
-          ln.unit_price,
-          ln.discount_pct,
-          ln.taxable,
-          ln.tax,
-          ln.total,
-          JSON.stringify(itemMeta),
-        ]
-      );
+      if (saleItemCols.has("meta")) {
+        await client.query(
+          `INSERT INTO sale_items
+             (sale_id, product_id, name, gst_slab, qty, unit_price, discount_pct, taxable, tax, total, meta)
+           VALUES
+             ($1,      $2,         $3,   $4,       $5,  $6,         $7,            $8,     $9,  $10, $11)`,
+          [
+            sale_id,
+            ln.product_id,
+            ln.name,
+            ln.gst_slab,
+            ln.qty,
+            ln.unit_price,
+            ln.discount_pct,
+            ln.taxable,
+            ln.tax,
+            ln.total,
+            JSON.stringify(itemMeta),
+          ]
+        );
+      } else {
+        await client.query(
+          `INSERT INTO sale_items
+             (sale_id, product_id, name, gst_slab, qty, unit_price, discount_pct, taxable, tax, total)
+           VALUES
+             ($1,      $2,         $3,   $4,       $5,  $6,         $7,            $8,     $9,  $10)`,
+          [
+            sale_id,
+            ln.product_id,
+            ln.name,
+            ln.gst_slab,
+            ln.qty,
+            ln.unit_price,
+            ln.discount_pct,
+            ln.taxable,
+            ln.tax,
+            ln.total,
+          ]
+        );
+      }
 
       const delta = is_return ? ln.qty : -ln.qty;
       await applyStockDelta(
         client,
         { id: ln.product_id, name: ln.product_id ? null : ln.name },
         delta,
-        allowNegative
+        allowNegative,
+        prodCols
       );
     }
 
