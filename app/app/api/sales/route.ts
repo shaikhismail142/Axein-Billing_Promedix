@@ -484,23 +484,9 @@ export async function POST(req: Request) {
     );
     const sale_id = Number(saleIns.rows[0].id);
 
-    // Optional: record a payment row
-    if (paid > 0) {
-      try {
-        const hasPayments = await client.query(
-          `SELECT to_regclass('public.sale_payments') IS NOT NULL AS ok`
-        );
-        if (hasPayments.rows?.[0]?.ok) {
-          await client.query(
-            `INSERT INTO sale_payments (sale_id, method, amount, ref)
-             VALUES ($1, $2, $3, $4)`,
-            [sale_id, payment_method || "cash", paid, invoice_no || null]
-          );
-        }
-      } catch {
-        // ignore payments insert failures
-      }
-    }
+    const paymentRow = paid > 0
+      ? { sale_id, method: payment_method || "cash", amount: paid, ref: invoice_no || null }
+      : null;
 
     // Insert sale items + Adjust stock
     for (const ln of lines) {
@@ -548,6 +534,24 @@ export async function POST(req: Request) {
     }
 
     await client.query("COMMIT");
+
+    // Optional: record a payment row AFTER commit to avoid aborting the main tx
+    if (paymentRow) {
+      try {
+        const hasPayments = await client.query(
+          `SELECT to_regclass('public.sale_payments') IS NOT NULL AS ok`
+        );
+        if (hasPayments.rows?.[0]?.ok) {
+          await client.query(
+            `INSERT INTO sale_payments (sale_id, method, amount, ref)
+             VALUES ($1, $2, $3, $4)`,
+            [paymentRow.sale_id, paymentRow.method, paymentRow.amount, paymentRow.ref]
+          );
+        }
+      } catch (e: any) {
+        console.warn("sale_payments insert skipped:", e?.message || e);
+      }
+    }
 
     return new Response(JSON.stringify({ id: sale_id, invoice_no }), {
       status: 200,

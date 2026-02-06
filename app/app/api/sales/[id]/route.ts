@@ -222,7 +222,9 @@ export async function PUT(req: Request, { params }: { params: { id: string } }) 
       );
     }
 
-    // Optional: refresh sale_payments (single row)
+    await client.query("COMMIT");
+
+    // Optional: refresh sale_payments AFTER commit (avoid aborting main tx)
     try {
       const hasPayments = await client.query(
         `SELECT to_regclass('public.sale_payments') IS NOT NULL AS ok`
@@ -237,11 +239,9 @@ export async function PUT(req: Request, { params }: { params: { id: string } }) 
           );
         }
       }
-    } catch {
-      // ignore payments update failures
+    } catch (e: any) {
+      console.warn("sale_payments update skipped:", e?.message || e);
     }
-
-    await client.query("COMMIT");
     return NextResponse.json({ ok: true, id: saleId });
   } catch (err: any) {
     await client.query("ROLLBACK");
