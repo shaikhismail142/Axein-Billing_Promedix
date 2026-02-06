@@ -145,7 +145,7 @@ export default async function InvoicePage({ params }: { params: { id: string } }
       {/* Items */}
       <div className="rounded-xl border overflow-x-auto">
         <table className="w-full text-sm">
-          <thead className="bg-gray-50">
+          <thead className="bg-gray-50 text-gray-700 dark:bg-slate-100 dark:text-slate-900">
             <tr>
               <th className="text-left px-3 py-2">Description</th>
               <th className="text-left px-3 py-2">Category</th>
