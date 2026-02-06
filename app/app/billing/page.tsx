@@ -205,12 +205,18 @@ export default function Billing() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)
       });
-      if (!r.ok) throw new Error(await r.text().catch(()=> 'save failed'));
-      const j = await r.json();
+      const raw = await r.text();
+      let j: any = null;
+      try { j = raw ? JSON.parse(raw) : null; } catch {}
+      if (!r.ok) {
+        const msg = j?.error || j?.detail || raw || 'save failed';
+        throw new Error(msg);
+      }
+      if (!j) j = {};
       window.location.href = `/invoices/${j.id}`;
     } catch (e) {
       console.error(e);
-      alert('Failed to save');
+      alert(`Failed to save: ${(e as any)?.message || e}`);
     } finally {
       setSaving(false);
     }

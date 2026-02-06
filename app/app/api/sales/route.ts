@@ -329,6 +329,7 @@ export async function POST(req: Request) {
   };
 
   const lines: Line[] = [];
+  let discount_total = 0;
   for (const it of items) {
     const product_id =
       it.product_id != null && it.product_id !== ""
@@ -354,10 +355,13 @@ export async function POST(req: Request) {
       });
     }
 
+    const gross = unit_price * qty;
     const discounted = unit_price * (1 - discount_pct / 100);
     const taxable = round2(discounted * qty);
     const tax = round2((gst_slab / 100) * taxable);
     const total = round2(taxable + tax);
+    const discountAmount = round2(Math.max(gross - taxable, 0));
+    discount_total += discountAmount;
 
     lines.push({
       product_id: Number.isFinite(product_id as number) ? (product_id as number) : null,
@@ -376,6 +380,7 @@ export async function POST(req: Request) {
 
   const subtotal = round2(lines.reduce((a, b) => a + b.taxable, 0));
   const tax_total = round2(lines.reduce((a, b) => a + b.tax, 0));
+  discount_total = round2(discount_total);
 
   // NEW: extra
   const extra_amount = round2(Number(payload.extra_amount ?? 0) || 0);
@@ -431,21 +436,37 @@ export async function POST(req: Request) {
       dc_no,
     };
 
-    const saleCols: string[] = ["invoice_no", "customer_id", "subtotal", "tax_total", "total"];
-    const saleVals: any[] = [
-      invoice_no,
-      customer_id,
-      subtotal,
-      tax_total,
-      grand_total,
-    ];
-    if (salesCols.has("invoice_date")) { saleCols.push("invoice_date"); saleVals.push(invoiceDateParam.toISOString()); }
-    if (salesCols.has("amount_paid")) { saleCols.push("amount_paid"); saleVals.push(paid); }
-    if (salesCols.has("pending_amount")) { saleCols.push("pending_amount"); saleVals.push(pending_amount); }
-    if (salesCols.has("payment_status")) { saleCols.push("payment_status"); saleVals.push(payment_status); }
-    if (salesCols.has("payment_method")) { saleCols.push("payment_method"); saleVals.push(payment_method); }
-    if (salesCols.has("meta")) { saleCols.push("meta"); saleVals.push(saleMeta); }
-    if (salesCols.has("dc_no")) { saleCols.push("dc_no"); saleVals.push(dc_no); }
+    const saleCols: string[] = [];
+    const saleVals: any[] = [];
+    const addSale = (col: string, val: any) => {
+      if (salesCols.has(col)) { saleCols.push(col); saleVals.push(val); }
+    };
+
+    addSale("invoice_no", invoice_no);
+    addSale("customer_id", customer_id);
+    addSale("invoice_date", invoiceDateParam.toISOString());
+    addSale("created_at", invoiceDateParam.toISOString());
+
+    addSale("subtotal", subtotal);
+    addSale("tax_total", tax_total);
+    addSale("total", grand_total);
+
+    // Compat columns
+    addSale("taxable_value", subtotal);
+    addSale("grand_total", grand_total);
+    addSale("roundoff", 0);
+    addSale("round_off", 0);
+    addSale("discount_total", discount_total);
+    if (salesCols.has("cgst")) addSale("cgst", round2(tax_total / 2));
+    if (salesCols.has("sgst")) addSale("sgst", round2(tax_total / 2));
+    if (salesCols.has("igst")) addSale("igst", 0);
+
+    addSale("amount_paid", paid);
+    addSale("pending_amount", pending_amount);
+    addSale("payment_status", payment_status);
+    addSale("payment_method", payment_method);
+    addSale("meta", saleMeta);
+    addSale("dc_no", dc_no);
 
     const salePlaceholders = saleVals.map((_, i) => `$${i + 1}`).join(", ");
     const saleIns = await client.query(
@@ -480,46 +501,34 @@ export async function POST(req: Request) {
         ...(ln.batch_no ? { batch_no: ln.batch_no } : {}),
         ...(ln.exp_date ? { exp_date: ln.exp_date } : {}),
       };
-      if (saleItemCols.has("meta")) {
-        await client.query(
-          `INSERT INTO sale_items
-             (sale_id, product_id, name, gst_slab, qty, unit_price, discount_pct, taxable, tax, total, meta)
-           VALUES
-             ($1,      $2,         $3,   $4,       $5,  $6,         $7,            $8,     $9,  $10, $11)`,
-          [
-            sale_id,
-            ln.product_id,
-            ln.name,
-            ln.gst_slab,
-            ln.qty,
-            ln.unit_price,
-            ln.discount_pct,
-            ln.taxable,
-            ln.tax,
-            ln.total,
-            JSON.stringify(itemMeta),
-          ]
-        );
-      } else {
-        await client.query(
-          `INSERT INTO sale_items
-             (sale_id, product_id, name, gst_slab, qty, unit_price, discount_pct, taxable, tax, total)
-           VALUES
-             ($1,      $2,         $3,   $4,       $5,  $6,         $7,            $8,     $9,  $10)`,
-          [
-            sale_id,
-            ln.product_id,
-            ln.name,
-            ln.gst_slab,
-            ln.qty,
-            ln.unit_price,
-            ln.discount_pct,
-            ln.taxable,
-            ln.tax,
-            ln.total,
-          ]
-        );
-      }
+      const itemCols: string[] = [];
+      const itemVals: any[] = [];
+      const addItem = (col: string, val: any) => {
+        if (saleItemCols.has(col)) { itemCols.push(col); itemVals.push(val); }
+      };
+
+      addItem("sale_id", sale_id);
+      addItem("product_id", ln.product_id);
+      addItem("name", ln.name);
+      addItem("hsn_code", null);
+      addItem("gst_slab", ln.gst_slab);
+      addItem("qty", ln.qty);
+      addItem("unit", "pcs");
+      addItem("unit_price", ln.unit_price);
+      addItem("discount_pct", ln.discount_pct);
+      addItem("taxable", ln.taxable);
+      addItem("tax", ln.tax);
+      if (saleItemCols.has("cgst")) addItem("cgst", round2(ln.tax / 2));
+      if (saleItemCols.has("sgst")) addItem("sgst", round2(ln.tax / 2));
+      if (saleItemCols.has("igst")) addItem("igst", 0);
+      addItem("total", ln.total);
+      if (saleItemCols.has("meta")) addItem("meta", JSON.stringify(itemMeta));
+
+      const ph = itemVals.map((_, i) => `$${i + 1}`).join(", ");
+      await client.query(
+        `INSERT INTO sale_items (${itemCols.join(", ")}) VALUES (${ph})`,
+        itemVals
+      );
 
       const delta = is_return ? ln.qty : -ln.qty;
       await applyStockDelta(

@@ -121,19 +121,33 @@ export async function PUT(req: Request, { params }: { params: { id: string } }) 
         ...(it.batch_no ? { batch_no: String(it.batch_no).trim() } : {}),
         ...(it.exp_date ? { exp_date: String(it.exp_date).trim() } : {}),
       };
-      if (saleItemCols.has("meta")) {
-        await client.query(
-          `INSERT INTO sale_items (sale_id, product_id, name, gst_slab, qty, unit_price, discount_pct, taxable, tax, total, meta)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
-          [saleId, it.product_id ?? null, it.name.trim(), gst, qty, rate, disc, round2(taxable), round2(tax), round2(lineTotal), JSON.stringify(itemMeta)]
-        );
-      } else {
-        await client.query(
-          `INSERT INTO sale_items (sale_id, product_id, name, gst_slab, qty, unit_price, discount_pct, taxable, tax, total)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
-          [saleId, it.product_id ?? null, it.name.trim(), gst, qty, rate, disc, round2(taxable), round2(tax), round2(lineTotal)]
-        );
-      }
+      const itemCols: string[] = [];
+      const itemVals: any[] = [];
+      const addItem = (col: string, val: any) => {
+        if (saleItemCols.has(col)) { itemCols.push(col); itemVals.push(val); }
+      };
+      addItem("sale_id", saleId);
+      addItem("product_id", it.product_id ?? null);
+      addItem("name", it.name.trim());
+      addItem("hsn_code", null);
+      addItem("gst_slab", gst);
+      addItem("qty", qty);
+      addItem("unit", "pcs");
+      addItem("unit_price", rate);
+      addItem("discount_pct", disc);
+      addItem("taxable", round2(taxable));
+      addItem("tax", round2(tax));
+      if (saleItemCols.has("cgst")) addItem("cgst", round2(tax / 2));
+      if (saleItemCols.has("sgst")) addItem("sgst", round2(tax / 2));
+      if (saleItemCols.has("igst")) addItem("igst", 0);
+      addItem("total", round2(lineTotal));
+      if (saleItemCols.has("meta")) addItem("meta", JSON.stringify(itemMeta));
+
+      const ph = itemVals.map((_, i) => `$${i + 1}`).join(", ");
+      await client.query(
+        `INSERT INTO sale_items (${itemCols.join(", ")}) VALUES (${ph})`,
+        itemVals
+      );
 
       // Apply new stock effects
       const nextIsReturn = !!body.is_return;
@@ -158,19 +172,29 @@ export async function PUT(req: Request, { params }: { params: { id: string } }) 
         ? body.payment_method.trim()
         : existingMethod;
 
-    const updateCols: string[] = ["subtotal=$2", "tax_total=$3", "total=$4", "customer_id=$5"];
-    const updateVals: any[] = [
-      saleId,
-      round2(subtotal),
-      round2(tax_total),
-      round2(total),
-      await resolveCustomerId(client, body),
-    ];
-    let idx = 6;
-    if (salesCols.has("amount_paid")) { updateCols.push(`amount_paid=$${idx++}`); updateVals.push(paid); }
-    if (salesCols.has("pending_amount")) { updateCols.push(`pending_amount=$${idx++}`); updateVals.push(pendingAmount); }
-    if (salesCols.has("payment_status")) { updateCols.push(`payment_status=$${idx++}`); updateVals.push(paymentStatus); }
-    if (salesCols.has("payment_method")) { updateCols.push(`payment_method=$${idx++}`); updateVals.push(paymentMethod || null); }
+    const updateCols: string[] = ["customer_id=$2"];
+    const updateVals: any[] = [saleId, await resolveCustomerId(client, body)];
+    let idx = 3;
+
+    const addCol = (col: string, val: any) => {
+      if (salesCols.has(col)) { updateCols.push(`${col}=$${idx++}`); updateVals.push(val); }
+    };
+
+    addCol("subtotal", round2(subtotal));
+    addCol("tax_total", round2(tax_total));
+    addCol("total", round2(total));
+    addCol("taxable_value", round2(subtotal));
+    addCol("grand_total", round2(total));
+    addCol("roundoff", 0);
+    addCol("round_off", 0);
+    if (salesCols.has("cgst")) addCol("cgst", round2(tax_total / 2));
+    if (salesCols.has("sgst")) addCol("sgst", round2(tax_total / 2));
+    if (salesCols.has("igst")) addCol("igst", 0);
+
+    addCol("amount_paid", paid);
+    addCol("pending_amount", pendingAmount);
+    addCol("payment_status", paymentStatus);
+    addCol("payment_method", paymentMethod || null);
     await client.query(
       `UPDATE sales SET ${updateCols.join(", ")} WHERE id=$1`,
       updateVals
