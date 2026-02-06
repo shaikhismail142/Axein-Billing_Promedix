@@ -107,10 +107,28 @@ export async function POST(_: NextRequest, { params }: { params: { id: string } 
       );
     }
 
-    await client.query(
-      `update sales set subtotal=$2, tax_total=$3, total=$4 where id=$1`,
-      [sale.id, round2(subtotal), round2(tax_total), round2(total)]
-    );
+    const subtotalRounded = round2(subtotal);
+    const taxRounded = round2(tax_total);
+    const totalRounded = round2(total);
+    const amountPaid = 0;
+    const pendingAmount = totalRounded;
+    const paymentStatus = "Pending";
+
+    try {
+      await client.query(
+        `update sales
+           set subtotal=$2, tax_total=$3, total=$4,
+               amount_paid=$5, pending_amount=$6, payment_status=$7
+         where id=$1`,
+        [sale.id, subtotalRounded, taxRounded, totalRounded, amountPaid, pendingAmount, paymentStatus]
+      );
+    } catch {
+      // fallback if payment columns don't exist
+      await client.query(
+        `update sales set subtotal=$2, tax_total=$3, total=$4 where id=$1`,
+        [sale.id, subtotalRounded, taxRounded, totalRounded]
+      );
+    }
 
     await client.query("COMMIT");
     return NextResponse.json({ sale_id: sale.id });

@@ -18,6 +18,9 @@ type Sale = {
   invoice_date: string | null;
   is_return: boolean;
   amount_paid: number;
+  pending_amount?: number;
+  payment_status?: string | null;
+  payment_method?: string | null;
   notes: string | null;
   customer_name?: string | null;
   patient_name?: string | null;
@@ -45,7 +48,11 @@ export default async function EditInvoicePage({ params }: { params: { id: string
     `SELECT s.id, s.invoice_no, s.customer_id, s.subtotal, s.tax_total, s.total,
             s.created_at, s.invoice_date,
             COALESCE((s.meta->>'is_return')::boolean, false) AS is_return,
-            COALESCE((s.meta->>'amount_paid')::numeric, 0)  AS amount_paid,
+            COALESCE(s.amount_paid, (s.meta->>'amount_paid')::numeric, 0)  AS amount_paid,
+            COALESCE(s.pending_amount,
+                     GREATEST(s.total - COALESCE(s.amount_paid, (s.meta->>'amount_paid')::numeric, 0), 0)) AS pending_amount,
+            COALESCE(NULLIF(s.payment_status,''), (s.meta->>'payment_status')) AS payment_status,
+            COALESCE(NULLIF(s.payment_method,''), (s.meta->>'payment_method')) AS payment_method,
             (s.meta->>'notes')                               AS notes,
             (s.meta->>'patient_name')                        AS patient_name,
             (s.meta->>'doctor_name')                         AS doctor_name,

@@ -44,6 +44,18 @@ export async function GET(_: NextRequest, { params }: { params: { id: string } }
         : (pCols.has("bill_date") ? "to_char(bill_date, 'YYYY-MM-DD') AS invoice_date" : "NULL AS invoice_date"),
       pCols.has("total_amount") ? "total_amount::text" : (pCols.has("grand_total") ? "grand_total::text AS total_amount" : "'0'::text AS total_amount"),
       pCols.has("total_tax") ? "total_tax::text" : (pCols.has("tax_total") ? "tax_total::text AS total_tax" : "'0'::text AS total_tax"),
+      pCols.has("amount_paid")
+        ? "amount_paid::text"
+        : "COALESCE((meta->>'amount_paid')::text, '0') AS amount_paid",
+      pCols.has("pending_amount")
+        ? "pending_amount::text"
+        : "NULL AS pending_amount",
+      pCols.has("payment_status")
+        ? "payment_status"
+        : "COALESCE(meta->>'payment_status', NULL) AS payment_status",
+      pCols.has("payment_method")
+        ? "payment_method"
+        : "COALESCE(meta->>'payment_method', NULL) AS payment_method",
       pCols.has("meta") ? "meta" : "'{}'::jsonb AS meta",
       pCols.has("created_at") ? "created_at" : "now() AS created_at",
     ].join(", ");
@@ -111,9 +123,38 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
     if (body.meta !== undefined && pCols.has("meta")) {
       fields.push(`meta = coalesce(meta,'{}'::jsonb) || $${i++}`); values.push(body.meta ?? {});
     }
+    if (body.amount_paid !== undefined && pCols.has("amount_paid")) {
+      fields.push(`amount_paid = $${i++}`); values.push(asNum(body.amount_paid));
+    }
+    if (body.payment_method !== undefined && pCols.has("payment_method")) {
+      fields.push(`payment_method = $${i++}`); values.push(body.payment_method ?? null);
+    }
 
     if (fields.length) {
       await client.query(`UPDATE purchases SET ${fields.join(", ")} WHERE id = $${i}`, [...values, id]);
+    }
+
+    if (body.amount_paid !== undefined) {
+      const totRes = await client.query(
+        `SELECT COALESCE(grand_total, total_amount, 0) AS total FROM purchases WHERE id=$1`,
+        [id]
+      );
+      const total = asNum(totRes.rows?.[0]?.total ?? 0);
+      const paid = asNum(body.amount_paid);
+      const pending = Math.max(total - paid, 0);
+      const status = paid >= total - 0.01 ? "Paid" : paid > 0 ? "Partial" : "Pending";
+      if (pCols.has("pending_amount")) {
+        await client.query(`UPDATE purchases SET pending_amount=$1 WHERE id=$2`, [pending, id]);
+      }
+      if (pCols.has("payment_status")) {
+        await client.query(`UPDATE purchases SET payment_status=$1 WHERE id=$2`, [status, id]);
+      }
+      if (pCols.has("meta")) {
+        await client.query(
+          `UPDATE purchases SET meta = coalesce(meta,'{}') || $1::jsonb WHERE id = $2`,
+          [JSON.stringify({ amount_paid: paid, pending_amount: pending, payment_status: status }), id]
+        );
+      }
     }
 
     if (Array.isArray(body.items)) {
@@ -171,6 +212,28 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
           `UPDATE purchases SET meta = jsonb_set(coalesce(meta,'{}'), '{totals}', $1::jsonb, true) WHERE id = $2`,
           [JSON.stringify({ subtotal, total_tax, discount_total, total_amount: grand }), id]
         );
+      }
+
+      // Recompute payment status if columns exist
+      if (pCols.has("amount_paid") || pCols.has("pending_amount") || pCols.has("payment_status")) {
+        const paid = asNum(body.amount_paid ?? 0);
+        const pending = Math.max(grand - paid, 0);
+        const status = paid >= grand - 0.01 ? "Paid" : paid > 0 ? "Partial" : "Pending";
+        if (pCols.has("amount_paid")) {
+          await client.query(`UPDATE purchases SET amount_paid=$1 WHERE id=$2`, [paid, id]);
+        }
+        if (pCols.has("pending_amount")) {
+          await client.query(`UPDATE purchases SET pending_amount=$1 WHERE id=$2`, [pending, id]);
+        }
+        if (pCols.has("payment_status")) {
+          await client.query(`UPDATE purchases SET payment_status=$1 WHERE id=$2`, [status, id]);
+        }
+        if (pCols.has("meta")) {
+          await client.query(
+            `UPDATE purchases SET meta = coalesce(meta,'{}') || $1::jsonb WHERE id = $2`,
+            [JSON.stringify({ amount_paid: paid, pending_amount: pending, payment_status: status }), id]
+          );
+        }
       }
     }
 

@@ -74,6 +74,7 @@ export default function InvoiceEditForm({ sale, items: initItems }: Props) {
   );
   const [isReturn, setIsReturn] = useState<boolean>(!!sale.is_return);
   const [amountPaid, setAmountPaid] = useState<number>(toNum(sale.amount_paid, 0));
+  const [paymentMethod, setPaymentMethod] = useState<string>(sale.payment_method || "");
   const [patientName, setPatientName] = useState<string>(sale.patient_name || "");
   const [doctorName, setDoctorName] = useState<string>(sale.doctor_name || "");
   const [saving, setSaving] = useState(false);
@@ -95,8 +96,8 @@ export default function InvoiceEditForm({ sale, items: initItems }: Props) {
     });
   }, [items]);
 
-  const computed = useMemo(() => {
-    let subtotal = 0, tax_total = 0, total = 0;
+    const computed = useMemo(() => {
+      let subtotal = 0, tax_total = 0, total = 0;
     for (const rc of rowsComputed) {
       subtotal += rc.taxable;
       tax_total += rc.tax;
@@ -149,6 +150,7 @@ export default function InvoiceEditForm({ sale, items: initItems }: Props) {
       const payload = {
         is_return: !!isReturn,
         amount_paid: toNum(amountPaid, 0),
+        payment_method: paymentMethod || null,
         customer_id: customerId || undefined,
         customer_name: !customerId ? (customerInput || "").trim() : undefined,
         patient_name: (patientName || "").trim() || null,
@@ -218,6 +220,22 @@ export default function InvoiceEditForm({ sale, items: initItems }: Props) {
             onChange={e => setAmountPaid(toNum(e.target.value, 0))}
             className="border px-2 py-1 rounded w-32 text-right"
           />
+        </label>
+
+        <label className="flex items-center gap-2">
+          <span>Method</span>
+          <select
+            className="border px-2 py-1 rounded"
+            value={paymentMethod}
+            onChange={(e) => setPaymentMethod(e.target.value)}
+          >
+            <option value="">Select</option>
+            <option value="cash">Cash</option>
+            <option value="upi">UPI</option>
+            <option value="card">Card</option>
+            <option value="bank">Bank</option>
+            <option value="split">Split</option>
+          </select>
         </label>
       </div>
 

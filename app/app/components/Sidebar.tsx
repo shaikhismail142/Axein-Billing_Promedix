@@ -11,6 +11,7 @@ const nav = [
   { href: '/products', label: 'Products' },
   { href: '/quotations', label: 'Quotations' },
   { href: '/invoices', label: 'Invoices' },
+  { href: '/accounting', label: 'Accounting' },
   { href: '/inventory/low-stock', label: 'Low stock' },
   { href: '/settings', label: 'Settings' },
 ];

@@ -26,6 +26,10 @@ interface PurchaseRow {
   items_count?: number | null;
   total_amount?: number | null;
   grand_total?: number | null;
+  amount_paid?: number | string | null;
+  pending_amount?: number | string | null;
+  payment_status?: string | null;
+  payment_method?: string | null;
   status?: string | null;
   meta?: any;
   [key: string]: any;
@@ -107,6 +111,7 @@ export default async function PurchasesPage({ searchParams }: { searchParams?: R
                   <th className="px-4 py-3 font-medium">Vendor</th>
                   <th className="px-4 py-3 font-medium">Bill No</th>
                   <th className="px-4 py-3 font-medium">Total</th>
+                  <th className="px-4 py-3 font-medium">Outstanding</th>
                   <th className="px-4 py-3 font-medium">Status</th>
                 </tr>
               </thead>
@@ -118,6 +123,9 @@ export default async function PurchasesPage({ searchParams }: { searchParams?: R
                   const bill = r.invoice_no || r.bill_no || "-";
                   const totalAmt = r.total_amount ?? r.grand_total ?? 0;
                   const status = r.status || (r?.meta?.posted ? "applied" : "draft");
+                  const paidAmt = Number(r.amount_paid ?? r.meta?.amount_paid ?? 0);
+                  const pending = Number(r.pending_amount ?? Math.max(Number(totalAmt || 0) - paidAmt, 0));
+                  const payStatus = r.payment_status || (pending <= 0 ? "Paid" : paidAmt > 0 ? "Partial" : "Pending");
                   return (
                     <tr key={id} className="border-b border-black/5 hover:bg-black/5/50">
                       <td className="px-4 py-3 whitespace-nowrap">
@@ -128,7 +136,8 @@ export default async function PurchasesPage({ searchParams }: { searchParams?: R
                       <td className="px-4 py-3">{vendor}</td>
                       <td className="px-4 py-3">{bill}</td>
                       <td className="px-4 py-3 font-medium">{formatINR(totalAmt)}</td>
-                      <td className="px-4 py-3">{status}</td>
+                      <td className="px-4 py-3 font-medium">{formatINR(pending)}</td>
+                      <td className="px-4 py-3">{payStatus} · {status}</td>
                     </tr>
                   );
                 })}

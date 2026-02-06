@@ -17,6 +17,7 @@ type ReqItem = {
 type ReqBody = {
   is_return?: boolean;
   amount_paid?: number;
+  payment_method?: string | null;
   customer_id?: number | null;
   customer?: { name: string; phone?: string; gstin?: string; address?: string } | null;
   customer_name?: string | null;
@@ -98,17 +99,50 @@ export async function PUT(req: Request, { params }: { params: { id: string } }) 
 
     // Totals + meta
     if (body.is_return) { subtotal = -subtotal; tax_total = -tax_total; total = -total; }
-    await client.query(
-      `UPDATE sales SET subtotal=$2, tax_total=$3, total=$4, customer_id=$5
-        WHERE id=$1`,
-      [saleId, round2(subtotal), round2(tax_total), round2(total),
-       await resolveCustomerId(client, body)]
-    );
+    const amountPaid = round2(Number(body.amount_paid ?? (curMeta.amount_paid ?? 0) ?? 0));
+    const paid = Math.max(amountPaid, 0);
+    const pendingAmount = round2(Math.max(total - paid, 0));
+    const paymentStatus =
+      paid >= total - 0.01 ? "Paid" : paid > 0 ? "Partial" : "Pending";
+    const paymentMethod =
+      typeof body.payment_method === "string"
+        ? body.payment_method.trim()
+        : (curMeta.payment_method ?? null);
+
+    // Try update with payment columns; fallback if columns missing
+    try {
+      await client.query(
+        `UPDATE sales SET subtotal=$2, tax_total=$3, total=$4, customer_id=$5,
+                          amount_paid=$6, pending_amount=$7, payment_status=$8, payment_method=$9
+          WHERE id=$1`,
+        [
+          saleId,
+          round2(subtotal),
+          round2(tax_total),
+          round2(total),
+          await resolveCustomerId(client, body),
+          paid,
+          pendingAmount,
+          paymentStatus,
+          paymentMethod || null,
+        ]
+      );
+    } catch {
+      await client.query(
+        `UPDATE sales SET subtotal=$2, tax_total=$3, total=$4, customer_id=$5
+          WHERE id=$1`,
+        [saleId, round2(subtotal), round2(tax_total), round2(total),
+         await resolveCustomerId(client, body)]
+      );
+    }
 
     const newMeta = {
       ...(curMeta || {}),
       is_return: !!body.is_return,
-      amount_paid: round2(Number(body.amount_paid ?? (curMeta.amount_paid ?? 0))),
+      amount_paid: paid,
+      pending_amount: pendingAmount,
+      payment_status: paymentStatus,
+      payment_method: paymentMethod || null,
       notes: typeof (body as any).notes === 'string'
         ? (body as any).notes
         : (curMeta.notes ?? null),
@@ -121,6 +155,25 @@ export async function PUT(req: Request, { params }: { params: { id: string } }) 
       `UPDATE sales SET meta=$2::jsonb WHERE id=$1`,
       [saleId, JSON.stringify(newMeta)]
     );
+
+    // Optional: refresh sale_payments (single row)
+    try {
+      const hasPayments = await client.query(
+        `SELECT to_regclass('public.sale_payments') IS NOT NULL AS ok`
+      );
+      if (hasPayments.rows?.[0]?.ok) {
+        await client.query(`DELETE FROM sale_payments WHERE sale_id=$1`, [saleId]);
+        if (paid > 0) {
+          await client.query(
+            `INSERT INTO sale_payments (sale_id, method, amount, ref)
+             VALUES ($1, $2, $3, NULL)`,
+            [saleId, paymentMethod || "cash", paid]
+          );
+        }
+      }
+    } catch {
+      // ignore payments update failures
+    }
 
     await client.query("COMMIT");
     return NextResponse.json({ ok: true, id: saleId });

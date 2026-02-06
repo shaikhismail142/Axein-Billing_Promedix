@@ -6,6 +6,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import * as csvSync from 'csv-parse/sync';
+import JSZip from 'jszip';
 
 // TAR reader
 // eslint-disable-next-line @typescript-eslint/no-var-requires
@@ -85,6 +86,20 @@ async function readTarIntoMap(buffer: Uint8Array): Promise<Map<string, Buffer>> 
 
     extract.end(Buffer.from(buffer)); // feed one Buffer (prevents EOF issues)
   });
+}
+
+async function readZipIntoMap(buffer: Uint8Array): Promise<Map<string, Buffer>> {
+  const out = new Map<string, Buffer>();
+  const zip = await JSZip.loadAsync(buffer);
+  const entries = Object.values(zip.files);
+  await Promise.all(
+    entries.map(async (f) => {
+      if (f.dir) return;
+      const content = await f.async('nodebuffer');
+      out.set(f.name, content as Buffer);
+    })
+  );
+  return out;
 }
 
 function normalizeTarBytes(u8: Uint8Array): Uint8Array {
@@ -351,7 +366,7 @@ export async function POST(req: NextRequest) {
   let apply = (url.searchParams.get('apply') || 'false') === 'true';
   let u8: Uint8Array;
 
-  if (ct.startsWith('application/x-tar') || ct.startsWith('application/octet-stream')) {
+  if (ct.startsWith('application/x-tar') || ct.startsWith('application/octet-stream') || ct.startsWith('application/zip')) {
     const ab = await req.arrayBuffer();
     u8 = new Uint8Array(ab);
   } else if (ct.includes('multipart/form-data')) {
@@ -361,32 +376,33 @@ export async function POST(req: NextRequest) {
     if (!file) return new Response('No file', { status: 400 });
     u8 = new Uint8Array(await file.arrayBuffer());
   } else {
-    return new Response('Send .tar as raw application/x-tar or multipart file', { status: 400 });
+    return new Response('Send .zip or .tar as raw upload or multipart file', { status: 400 });
   }
 
+  const fmt = sniffFormat(u8);
+  if (fmt === 'gz')  return new Response('You uploaded a .tar.gz. Please upload a plain .tar or a .zip.', { status: 400 });
+
   try {
-    const tmpPath = path.join(os.tmpdir(), `axein-restore-${Date.now()}-${Math.random().toString(36).slice(2)}.tar`);
+    const ext = fmt === 'zip' ? 'zip' : 'tar';
+    const tmpPath = path.join(os.tmpdir(), `axein-restore-${Date.now()}-${Math.random().toString(36).slice(2)}.${ext}`);
     fs.writeFileSync(tmpPath, u8);
   } catch {}
 
-  {
-    const fmt = sniffFormat(u8);
-    if (fmt === 'zip') return new Response('You uploaded a ZIP. Please upload a plain .tar.', { status: 400 });
-    if (fmt === 'gz')  return new Response('You uploaded a .tar.gz. Please upload a plain .tar (no gzip).', { status: 400 });
-  }
-
-  u8 = normalizeTarBytes(u8);
-
   try {
     let entries: Map<string, Buffer>;
-    try {
-      entries = await readTarIntoMap(u8);
-    } catch (e) {
-      logLine(`restore: first parse failed (${(e as any)?.message}); retry with extra zeros`);
-      const extra = new Uint8Array(u8.byteLength + 1024);
-      extra.set(u8);
-      u8 = extra;
-      entries = await readTarIntoMap(u8);
+    if (fmt === 'zip') {
+      entries = await readZipIntoMap(u8);
+    } else {
+      u8 = normalizeTarBytes(u8);
+      try {
+        entries = await readTarIntoMap(u8);
+      } catch (e) {
+        logLine(`restore: first parse failed (${(e as any)?.message}); retry with extra zeros`);
+        const extra = new Uint8Array(u8.byteLength + 1024);
+        extra.set(u8);
+        u8 = extra;
+        entries = await readTarIntoMap(u8);
+      }
     }
 
     const has = async (name: string) => entries.has(name);
@@ -398,14 +414,44 @@ export async function POST(req: NextRequest) {
 
     const hasManifest  = await has('manifest.json');
     const hasCustomers = await has('db/customers.csv');
+    const hasCategories = await has('db/categories.csv');
     const hasProducts  = await has('db/products.csv');
+    const hasSuppliers = await has('db/suppliers.csv');
+    const hasPurchases = await has('db/purchases.csv');
+    const hasPurchaseItems = await has('db/purchase_items.csv');
+    const hasQuotations = await has('db/quotations.csv');
+    const hasQuotationItems = await has('db/quotation_items.csv');
     const hasSales     = await has('db/sales.csv');
     const hasSaleItems = await has('db/sale_items.csv');
+    const hasBatches = await has('db/product_batches.csv');
+    const hasMovements = await has('db/stock_movements.csv');
+    const hasAdjustments = await has('db/inventory_adjustments.csv');
+    const hasAdjustmentItems = await has('db/inventory_adjustment_items.csv');
+    const hasNotifications = await has('db/notifications.csv');
     const hasSettings  = await has('db/settings.json');
 
     const invoicesPdfCount = [...entries.keys()].filter((n) => n.startsWith('invoices/') && n.endsWith('.pdf')).length;
 
-    const report = { hasManifest, hasCustomers, hasProducts, hasSales, hasSaleItems, hasSettings, invoicesPdfCount };
+    const report = {
+      hasManifest,
+      hasCustomers,
+      hasCategories,
+      hasProducts,
+      hasSuppliers,
+      hasPurchases,
+      hasPurchaseItems,
+      hasQuotations,
+      hasQuotationItems,
+      hasSales,
+      hasSaleItems,
+      hasBatches,
+      hasMovements,
+      hasAdjustments,
+      hasAdjustmentItems,
+      hasNotifications,
+      hasSettings,
+      invoicesPdfCount,
+    };
 
     if (!apply) {
       return Response.json({ ok: true, report });
@@ -419,9 +465,20 @@ export async function POST(req: NextRequest) {
       (await has(name)) ? JSON.parse((await entryBuffer(name)).toString('utf8')) : null;
 
     const customers: any[]   = await parseCsvIf('db/customers.csv');
+    const categories: any[]  = await parseCsvIf('db/categories.csv');
     const products: any[]    = await parseCsvIf('db/products.csv');
+    const suppliers: any[]   = await parseCsvIf('db/suppliers.csv');
+    const purchases: any[]   = await parseCsvIf('db/purchases.csv');
+    const purchaseItems: any[] = await parseCsvIf('db/purchase_items.csv');
+    const quotations: any[]  = await parseCsvIf('db/quotations.csv');
+    const quotationItems: any[] = await parseCsvIf('db/quotation_items.csv');
     const sales: any[]       = await parseCsvIf('db/sales.csv');
     const items: any[]       = await parseCsvIf('db/sale_items.csv');
+    const productBatches: any[] = await parseCsvIf('db/product_batches.csv');
+    const stockMovements: any[] = await parseCsvIf('db/stock_movements.csv');
+    const inventoryAdjustments: any[] = await parseCsvIf('db/inventory_adjustments.csv');
+    const inventoryAdjustmentItems: any[] = await parseCsvIf('db/inventory_adjustment_items.csv');
+    const notifications: any[] = await parseCsvIf('db/notifications.csv');
     const settingsArr: any[] = (await parseJsonIf('db/settings.json')) ?? [];
 
     // Build product name map from CSV (used to fill sale_items.name)
@@ -437,34 +494,56 @@ export async function POST(req: NextRequest) {
 
       // Column/type maps
       const infoCustomers = await getColumnInfoMap(client, 'customers');
+      const infoCategories = await getColumnInfoMap(client, 'categories');
       const infoProducts  = await getColumnInfoMap(client, 'products');
+      const infoSuppliers = await getColumnInfoMap(client, 'suppliers');
+      const infoPurchases = await getColumnInfoMap(client, 'purchases');
+      const infoPurchaseItems = await getColumnInfoMap(client, 'purchase_items');
+      const infoQuotations = await getColumnInfoMap(client, 'quotations');
+      const infoQuotationItems = await getColumnInfoMap(client, 'quotation_items');
       const infoSales     = await getColumnInfoMap(client, 'sales');
       const infoItems     = await getColumnInfoMap(client, 'sale_items');
+      const infoBatches   = await getColumnInfoMap(client, 'product_batches');
+      const infoMovements = await getColumnInfoMap(client, 'stock_movements');
+      const infoAdjustments = await getColumnInfoMap(client, 'inventory_adjustments');
+      const infoAdjustmentItems = await getColumnInfoMap(client, 'inventory_adjustment_items');
+      const infoNotifications = await getColumnInfoMap(client, 'notifications');
       const infoSettings  = await getColumnInfoMap(client, 'settings');
 
       const colsCustomers = new Set(infoCustomers.keys());
+      const colsCategories = new Set(infoCategories.keys());
       const colsProducts  = new Set(infoProducts.keys());
+      const colsSuppliers = new Set(infoSuppliers.keys());
+      const colsPurchases = new Set(infoPurchases.keys());
+      const colsPurchaseItems = new Set(infoPurchaseItems.keys());
+      const colsQuotations = new Set(infoQuotations.keys());
+      const colsQuotationItems = new Set(infoQuotationItems.keys());
       const colsSalesSet  = new Set(infoSales.keys());
       const colsItemsSet  = new Set(infoItems.keys());
+      const colsBatches = new Set(infoBatches.keys());
+      const colsMovements = new Set(infoMovements.keys());
+      const colsAdjustments = new Set(infoAdjustments.keys());
+      const colsAdjustmentItems = new Set(infoAdjustmentItems.keys());
+      const colsNotifications = new Set(infoNotifications.keys());
 
-      // customers
-      for (const r of customers) {
-        const emailVal  = isBlank(r.email) ? null : r.email;
-        const metaObj   = parseMetaMaybe(r.meta);
-        const createdAt = toDateVal(r.created_at) ?? new Date();
-
-        const wants: Record<string, any> = { id: r.id };
-        if (colsCustomers.has('name'))        wants.name = r.name ?? null;
-        if (colsCustomers.has('phone'))       wants.phone = r.phone ?? null;
-
-        if (colsCustomers.has('email')) {
-          wants.email = emailVal;
-          if (colsCustomers.has('meta')) wants.meta = metaObj;
-        } else if (colsCustomers.has('meta')) {
-          wants.meta = emailVal ? mergeMeta(metaObj, { email: emailVal }) : metaObj;
+      // categories (if present)
+      for (const r of categories) {
+        if (!colsCategories.size) break;
+        const wants: Record<string, any> = sanitizeRecordByTypes(r, infoCategories);
+        if (wants.id == null || wants.id === '') continue;
+        try {
+          await upsertRowDynamic(client, 'categories', colsCategories, wants, 'id');
+        } catch (e: any) {
+          logLine(`categories: skip row id=${r.id} (${e?.message || e})`);
         }
+      }
 
-        if (colsCustomers.has('created_at'))  wants.created_at = createdAt;
+      // customers (full restore)
+      for (const r of customers) {
+        const wants: Record<string, any> = sanitizeRecordByTypes(r, infoCustomers);
+        if (colsCustomers.has('meta') && !colsCustomers.has('email') && !isBlank(r.email)) {
+          wants.meta = mergeMeta(parseMetaMaybe(wants.meta), { email: r.email });
+        }
 
         // Ensure NOT NULLs
         const nn = ensureNonNullsOrSkip('customers', wants, infoCustomers, r, {});
@@ -478,15 +557,9 @@ export async function POST(req: NextRequest) {
         await upsertRowDynamic(client, 'customers', colsCustomers, sanitized, 'id');
       }
 
-      // products
+      // products (full restore)
       for (const r of products) {
-        const metaObj   = parseMetaMaybe(r.meta);
-        const createdAt = toDateVal(r.created_at) ?? new Date();
-
-        const wants: Record<string, any> = { id: r.id };
-        if (colsProducts.has('name'))       wants.name = r.name ?? null;
-        if (colsProducts.has('meta'))       wants.meta = metaObj;
-        if (colsProducts.has('created_at')) wants.created_at = createdAt;
+        const wants: Record<string, any> = sanitizeRecordByTypes(r, infoProducts);
 
         const nn = ensureNonNullsOrSkip('products', wants, infoProducts, r, {});
         if (!nn.ok) { logLine(nn.reason || 'products: skipped due to NOT NULL'); continue; }
@@ -504,17 +577,69 @@ export async function POST(req: NextRequest) {
         }
       }
 
-      // sales
-      for (const r of sales) {
-        const metaObj     = parseMetaMaybe(r.meta);
-        const createdAt   = toDateVal(r.created_at) ?? new Date();
-        const invoiceDate = toDateVal(r.invoice_date);
+      // suppliers
+      for (const r of suppliers) {
+        if (!colsSuppliers.size) break;
+        const wants: Record<string, any> = sanitizeRecordByTypes(r, infoSuppliers);
+        if (wants.id == null || wants.id === '') continue;
+        try {
+          await upsertRowDynamic(client, 'suppliers', colsSuppliers, wants, 'id');
+        } catch (e: any) {
+          logLine(`suppliers: skip row id=${r.id} (${e?.message || e})`);
+        }
+      }
 
-        const wants: Record<string, any> = { id: r.id };
-        if (colsSalesSet.has('customer_id'))  wants.customer_id = isBlank(r.customer_id) ? null : r.customer_id;
-        if (colsSalesSet.has('invoice_date')) wants.invoice_date = invoiceDate;
-        if (colsSalesSet.has('meta'))         wants.meta = metaObj;
-        if (colsSalesSet.has('created_at'))   wants.created_at = createdAt;
+      // purchases
+      for (const r of purchases) {
+        if (!colsPurchases.size) break;
+        const wants: Record<string, any> = sanitizeRecordByTypes(r, infoPurchases);
+        if (wants.id == null || wants.id === '') continue;
+        try {
+          await upsertRowDynamic(client, 'purchases', colsPurchases, wants, 'id');
+        } catch (e: any) {
+          logLine(`purchases: skip row id=${r.id} (${e?.message || e})`);
+        }
+      }
+
+      // purchase_items
+      for (const r of purchaseItems) {
+        if (!colsPurchaseItems.size) break;
+        const wants: Record<string, any> = sanitizeRecordByTypes(r, infoPurchaseItems);
+        if (wants.id == null || wants.id === '') continue;
+        try {
+          await upsertRowDynamic(client, 'purchase_items', colsPurchaseItems, wants, 'id');
+        } catch (e: any) {
+          logLine(`purchase_items: skip row id=${r.id} (${e?.message || e})`);
+        }
+      }
+
+      // quotations
+      for (const r of quotations) {
+        if (!colsQuotations.size) break;
+        const wants: Record<string, any> = sanitizeRecordByTypes(r, infoQuotations);
+        if (wants.id == null || wants.id === '') continue;
+        try {
+          await upsertRowDynamic(client, 'quotations', colsQuotations, wants, 'id');
+        } catch (e: any) {
+          logLine(`quotations: skip row id=${r.id} (${e?.message || e})`);
+        }
+      }
+
+      // quotation_items
+      for (const r of quotationItems) {
+        if (!colsQuotationItems.size) break;
+        const wants: Record<string, any> = sanitizeRecordByTypes(r, infoQuotationItems);
+        if (wants.id == null || wants.id === '') continue;
+        try {
+          await upsertRowDynamic(client, 'quotation_items', colsQuotationItems, wants, 'id');
+        } catch (e: any) {
+          logLine(`quotation_items: skip row id=${r.id} (${e?.message || e})`);
+        }
+      }
+
+      // sales (full restore)
+      for (const r of sales) {
+        const wants: Record<string, any> = sanitizeRecordByTypes(r, infoSales);
 
         const nn = ensureNonNullsOrSkip('sales', wants, infoSales, r, {});
         if (!nn.ok) { logLine(nn.reason || 'sales: skipped due to NOT NULL'); continue; }
@@ -585,6 +710,66 @@ export async function POST(req: NextRequest) {
         }
 
         await upsertRowDynamic(client, 'sale_items', colsItemsSet, sanitized, 'id');
+      }
+
+      // product_batches
+      for (const r of productBatches) {
+        if (!colsBatches.size) break;
+        const wants: Record<string, any> = sanitizeRecordByTypes(r, infoBatches);
+        if (wants.id == null || wants.id === '') continue;
+        try {
+          await upsertRowDynamic(client, 'product_batches', colsBatches, wants, 'id');
+        } catch (e: any) {
+          logLine(`product_batches: skip row id=${r.id} (${e?.message || e})`);
+        }
+      }
+
+      // stock_movements
+      for (const r of stockMovements) {
+        if (!colsMovements.size) break;
+        const wants: Record<string, any> = sanitizeRecordByTypes(r, infoMovements);
+        if (wants.id == null || wants.id === '') continue;
+        try {
+          await upsertRowDynamic(client, 'stock_movements', colsMovements, wants, 'id');
+        } catch (e: any) {
+          logLine(`stock_movements: skip row id=${r.id} (${e?.message || e})`);
+        }
+      }
+
+      // inventory_adjustments
+      for (const r of inventoryAdjustments) {
+        if (!colsAdjustments.size) break;
+        const wants: Record<string, any> = sanitizeRecordByTypes(r, infoAdjustments);
+        if (wants.id == null || wants.id === '') continue;
+        try {
+          await upsertRowDynamic(client, 'inventory_adjustments', colsAdjustments, wants, 'id');
+        } catch (e: any) {
+          logLine(`inventory_adjustments: skip row id=${r.id} (${e?.message || e})`);
+        }
+      }
+
+      // inventory_adjustment_items
+      for (const r of inventoryAdjustmentItems) {
+        if (!colsAdjustmentItems.size) break;
+        const wants: Record<string, any> = sanitizeRecordByTypes(r, infoAdjustmentItems);
+        if (wants.id == null || wants.id === '') continue;
+        try {
+          await upsertRowDynamic(client, 'inventory_adjustment_items', colsAdjustmentItems, wants, 'id');
+        } catch (e: any) {
+          logLine(`inventory_adjustment_items: skip row id=${r.id} (${e?.message || e})`);
+        }
+      }
+
+      // notifications
+      for (const r of notifications) {
+        if (!colsNotifications.size) break;
+        const wants: Record<string, any> = sanitizeRecordByTypes(r, infoNotifications);
+        if (wants.id == null || wants.id === '') continue;
+        try {
+          await upsertRowDynamic(client, 'notifications', colsNotifications, wants, 'id');
+        } catch (e: any) {
+          logLine(`notifications: skip row id=${r.id} (${e?.message || e})`);
+        }
       }
 
       // settings

@@ -27,6 +27,7 @@ type NewSaleBody = {
   invoice_date?: string | null; // ISO string (optional)
   is_return?: boolean;
   amount_paid?: number | string | null;
+  payment_method?: string | null;
   notes?: string | null;
   terms?: string | null;               // NEW
   extra_label?: string | null;         // NEW
@@ -304,6 +305,11 @@ export async function POST(req: Request) {
   const grand_total = round2(subtotal + tax_total + extra_amount);
 
   const amount_paid = round2(Number(payload.amount_paid ?? 0) || 0);
+  const paid = Math.max(amount_paid, 0);
+  const pending_amount = round2(Math.max(grand_total - paid, 0));
+  const payment_status =
+    paid >= grand_total - 0.01 ? "Paid" : paid > 0 ? "Partial" : "Pending";
+  const payment_method = nstr(payload.payment_method);
   const notes = nstr(payload.notes);
   const terms = nstr(payload.terms);
   const extra_label = nstr(payload.extra_label) || (extra_amount > 0 ? "Additional Charge" : null);
@@ -325,32 +331,81 @@ export async function POST(req: Request) {
     const dc_no = await getNextDcNo(client, String(biz?.name || "Company"), invoiceDateParam);
 
     // Insert sale (meta kept as JS object to match existing pattern)
-    const saleIns = await client.query(
-      `INSERT INTO sales
-         (invoice_no, customer_id, subtotal, tax_total, total, invoice_date, meta)
-       VALUES ($1,         $2,          $3,       $4,       $5,    $6,           $7)
-       RETURNING id`,
-      [
-        invoice_no,
-        customer_id,
-        subtotal,
-        tax_total,
-        grand_total,
-        invoiceDateParam.toISOString(),
-        {
-          is_return,
-          amount_paid,
-          notes,
-          terms,
-          extra_label,
-          extra_amount,
-          patient_name,
-          doctor_name,
-          dc_no,
-        },
-      ]
-    );
+    const saleMeta = {
+      is_return,
+      amount_paid: paid,
+      pending_amount,
+      payment_status,
+      payment_method,
+      notes,
+      terms,
+      extra_label,
+      extra_amount,
+      patient_name,
+      doctor_name,
+      dc_no,
+    };
+
+    let saleIns;
+    try {
+      saleIns = await client.query(
+        `INSERT INTO sales
+           (invoice_no, customer_id, subtotal, tax_total, total, invoice_date,
+            amount_paid, pending_amount, payment_status, payment_method, meta)
+         VALUES ($1,         $2,          $3,       $4,       $5,    $6,
+                $7,         $8,            $9,            $10,            $11)
+         RETURNING id`,
+        [
+          invoice_no,
+          customer_id,
+          subtotal,
+          tax_total,
+          grand_total,
+          invoiceDateParam.toISOString(),
+          paid,
+          pending_amount,
+          payment_status,
+          payment_method,
+          saleMeta,
+        ]
+      );
+    } catch {
+      // Back-compat if columns don't exist
+      saleIns = await client.query(
+        `INSERT INTO sales
+           (invoice_no, customer_id, subtotal, tax_total, total, invoice_date, meta)
+         VALUES ($1,         $2,          $3,       $4,       $5,    $6,           $7)
+         RETURNING id`,
+        [
+          invoice_no,
+          customer_id,
+          subtotal,
+          tax_total,
+          grand_total,
+          invoiceDateParam.toISOString(),
+          saleMeta,
+        ]
+      );
+    }
     const sale_id = Number(saleIns.rows[0].id);
+
+    // Optional: record a payment row
+    if (paid > 0) {
+      try {
+        const hasPayments = await client.query(
+          `SELECT to_regclass('public.sale_payments') IS NOT NULL AS ok`
+        );
+        if (hasPayments.rows?.[0]?.ok) {
+          await client.query(
+            `INSERT INTO sale_payments (sale_id, method, amount, ref)
+             VALUES ($1, $2, $3, $4)`,
+            [sale_id, payment_method || "cash", paid, invoice_no || null]
+          );
+        }
+      } catch {
+        // ignore payments insert failures
+      }
+    }
 
     // Insert sale items + Adjust stock
     for (const ln of lines) {

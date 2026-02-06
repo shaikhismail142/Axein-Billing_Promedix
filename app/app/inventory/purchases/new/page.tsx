@@ -107,6 +107,8 @@ async function createPurchase(formData: FormData) {
   const purchase_date = String(formData.get("purchase_date") || "").trim();
   const notes         = String(formData.get("notes") || "").trim();
   const paid          = formData.get("paid") === "1";
+  const amount_paid   = Number(formData.get("amount_paid") || 0);
+  const payment_method = String(formData.get("payment_method") || "").trim();
   const addFlag       = formData.get("add_to_inventory") === "1";
   const autoCreate    = formData.get("auto_create_products") === "1";
 
@@ -142,6 +144,8 @@ async function createPurchase(formData: FormData) {
     purchase_date: purchase_date || null,
     notes,
     paid,
+    amount_paid,
+    payment_method: payment_method || null,
     add_to_inventory: !!addFlag,
     items: normalized,
   };
@@ -207,7 +211,7 @@ export default async function NewPurchasePage({ searchParams }: { searchParams?:
 
       <div className="rounded-2xl border border-black/5 bg-[color:var(--surface-1)] p-4 md:p-6">
         <form action={createPurchase} className="space-y-6">
-          <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
+          <div className="grid grid-cols-1 md:grid-cols-5 gap-3">
             <label className="text-sm">
               <span className="block mb-1 text-[color:var(--muted)]">Vendor Name <span className="text-red-600">*</span></span>
               <input name="vendor_name" required className="w-full rounded-xl border border-black/10 bg-white/70 px-3 py-2 outline-none focus:ring-2 focus:ring-black/10" placeholder="e.g., Akbar Traders" />
@@ -219,6 +223,29 @@ export default async function NewPurchasePage({ searchParams }: { searchParams?:
             <label className="text-sm">
               <span className="block mb-1 text-[color:var(--muted)]">Purchase Date</span>
               <input type="date" name="purchase_date" className="w-full rounded-xl border border-black/10 bg-white/70 px-3 py-2 outline-none focus:ring-2 focus:ring-black/10" />
+            </label>
+            <label className="text-sm">
+              <span className="block mb-1 text-[color:var(--muted)]">Amount Paid</span>
+              <input
+                name="amount_paid"
+                type="number"
+                step="0.01"
+                className="w-full rounded-xl border border-black/10 bg-white/70 px-3 py-2 outline-none focus:ring-2 focus:ring-black/10"
+              />
+            </label>
+            <label className="text-sm">
+              <span className="block mb-1 text-[color:var(--muted)]">Payment Method</span>
+              <select
+                name="payment_method"
+                className="w-full rounded-xl border border-black/10 bg-white/70 px-3 py-2 outline-none focus:ring-2 focus:ring-black/10"
+              >
+                <option value="">Select</option>
+                <option value="cash">Cash</option>
+                <option value="upi">UPI</option>
+                <option value="card">Card</option>
+                <option value="bank">Bank</option>
+                <option value="split">Split</option>
+              </select>
             </label>
             <label className="text-sm inline-flex items-center gap-2 mt-6">
               <input type="checkbox" name="paid" value="1" className="size-4 rounded border-black/20" />

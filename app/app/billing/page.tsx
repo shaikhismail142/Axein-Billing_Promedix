@@ -66,6 +66,11 @@ export default function Billing() {
   const [patientName, setPatientName] = useState<string>("");
   const [doctorName, setDoctorName] = useState<string>("");
 
+  // Payment
+  const [paymentMode, setPaymentMode] = useState<"paid" | "partial" | "pending">("paid");
+  const [amountPaid, setAmountPaid] = useState<number>(0);
+  const [paymentMethod, setPaymentMethod] = useState<string>("cash");
+
   // -------- Prefill Notes/Terms from settings ----------
   useEffect(() => {
     (async () => {
@@ -161,6 +166,12 @@ export default function Billing() {
 
   const extra = Math.max(0, Number(extraAmount || 0));
   const grandTotal = +(totals.total + extra).toFixed(2);
+  const pendingAmount = Math.max(grandTotal - (Number(amountPaid) || 0), 0);
+
+  useEffect(() => {
+    if (paymentMode === "paid") setAmountPaid(grandTotal);
+    if (paymentMode === "pending") setAmountPaid(0);
+  }, [paymentMode, grandTotal]);
 
   // -------- Save sale ----------
   async function save() {
@@ -176,6 +187,8 @@ export default function Billing() {
         terms: (terms || "").trim() || null,
         extra_label: (extraLabel || "").trim() || null,
         extra_amount: extra,
+        amount_paid: Number(amountPaid || 0),
+        payment_method: paymentMethod || null,
         items: items.map((it) => ({
           product_id: it.product_id || null,
           name: it.name,
@@ -207,6 +220,7 @@ export default function Billing() {
     <div>
         <div className="card" style={{ padding: 16 }}>
           <h1 style={{ marginTop: 0 }}>Quick Billing</h1>
+          <p className="text-xs opacity-70">Create a bill fast — add customer, items, then confirm payment.</p>
 
         {/* Customer (optional) */}
         <div className="card" style={{ padding: 12, marginBottom: 12 }}>
@@ -285,6 +299,7 @@ export default function Billing() {
 
         {/* Product search / scan */}
         <div style={{ position: 'relative', marginBottom: 12 }}>
+          <label style={{ fontSize: 12, color: 'var(--muted)' }}>Product search / scan</label>
           <input
             className="input"
             placeholder="Scan barcode or search product..."
@@ -457,8 +472,8 @@ export default function Billing() {
           </div>
         </div>
 
-        {/* Summary + Save */}
-        <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 12 }}>
+        {/* Summary + Payment */}
+        <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 12, gap: 12, flexWrap: "wrap" }}>
           <div />
           <div className="card no-break" style={{ padding: 12, minWidth: 320 }}>
             <div className="flex justify-between"><span>Taxable</span><b>{inr(totals.taxable)}</b></div>
@@ -468,6 +483,61 @@ export default function Billing() {
             </div>
             <div className="flex justify-between" style={{ borderTop: '1px solid var(--glass-brd)', marginTop: 6, paddingTop: 6 }}>
               <span>Total</span><b style={{ fontSize: 18 }}>{inr(grandTotal)}</b>
+            </div>
+            <div className="flex justify-between mt-1"><span>Amount Paid</span><b>{inr(Number(amountPaid || 0))}</b></div>
+            <div className="flex justify-between"><span>Pending</span><b>{inr(pendingAmount)}</b></div>
+          </div>
+        </div>
+
+        <div className="card" style={{ padding: 12, marginTop: 12 }}>
+          <div className="text-sm font-semibold mb-2">Payment</div>
+          <div className="flex flex-wrap items-end gap-3">
+            <div className="flex items-center gap-2">
+              <label className="text-xs">Mode</label>
+              <select
+                className="input"
+                value={paymentMode}
+                onChange={(e) => setPaymentMode(e.target.value as any)}
+              >
+                <option value="paid">Paid in full</option>
+                <option value="partial">Partial</option>
+                <option value="pending">Pending</option>
+              </select>
+            </div>
+            <div className="flex items-center gap-2">
+              <label className="text-xs">Amount Paid</label>
+              <input
+                className="input"
+                type="number"
+                min={0}
+                step="0.01"
+                value={amountPaid}
+                onChange={(e) => {
+                  const val = Number(e.target.value || 0);
+                  setAmountPaid(val);
+                  if (val <= 0) setPaymentMode("pending");
+                  else if (val >= grandTotal - 0.01) setPaymentMode("paid");
+                  else setPaymentMode("partial");
+                }}
+                style={{ width: 160, textAlign: "right" }}
+              />
+            </div>
+            <div className="flex items-center gap-2">
+              <label className="text-xs">Method</label>
+              <select
+                className="input"
+                value={paymentMethod}
+                onChange={(e) => setPaymentMethod(e.target.value)}
+              >
+                <option value="cash">Cash</option>
+                <option value="upi">UPI</option>
+                <option value="card">Card</option>
+                <option value="bank">Bank</option>
+                <option value="split">Split</option>
+              </select>
+            </div>
+            <div className="text-xs opacity-70">
+              Pending: <b>{inr(pendingAmount)}</b>
             </div>
           </div>
         </div>

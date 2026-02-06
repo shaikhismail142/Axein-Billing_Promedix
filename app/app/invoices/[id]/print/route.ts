@@ -42,7 +42,11 @@ export async function GET(_: Request, { params }: { params: { id: string } }) {
     `SELECT s.id, s.invoice_no, s.customer_id, s.subtotal, s.tax_total, s.total,
             s.created_at, s.invoice_date,
             COALESCE((s.meta->>'is_return')::boolean, false)  AS is_return,
-            COALESCE((s.meta->>'amount_paid')::numeric, 0)   AS amount_paid,
+            COALESCE(s.amount_paid, (s.meta->>'amount_paid')::numeric, 0)   AS amount_paid,
+            COALESCE(s.pending_amount,
+                     GREATEST(s.total - COALESCE(s.amount_paid, (s.meta->>'amount_paid')::numeric, 0), 0)) AS pending_amount,
+            COALESCE(NULLIF(s.payment_status,''), (s.meta->>'payment_status')) AS payment_status,
+            COALESCE(NULLIF(s.payment_method,''), (s.meta->>'payment_method')) AS payment_method,
             (s.meta->>'notes')                                AS notes,
             (s.meta->>'terms')                                AS terms,
             (s.meta->>'extra_label')                          AS extra_label,
@@ -78,6 +82,9 @@ export async function GET(_: Request, { params }: { params: { id: string } }) {
   ).rows as any[];
 
   const displayDate = s.invoice_date ?? s.created_at;
+  const balanceDue = Number(
+    s.pending_amount ?? Math.max(Number(s.total || 0) - Number(s.amount_paid || 0), 0)
+  );
 
   const html = `<!doctype html>
 <html lang="en">
@@ -95,11 +102,16 @@ export async function GET(_: Request, { params }: { params: { id: string } }) {
       table, tr, td, th { break-inside: avoid; page-break-inside: avoid; }
       .no-break { break-inside: avoid; page-break-inside: avoid; }
     }
-    body { font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial; margin:24px; color:#111827; }
+    body { font-family: "Manrope", ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial; margin:24px; color:#0b1220; }
     h1,h2,h3 { margin:0; }
     .row { display:flex; justify-content:space-between; align-items:flex-start; gap:12px; }
     .muted { color:#64748b; }
     .logo { max-height:48px; object-fit:contain; }
+    .header { border-radius:16px; overflow:hidden; border:1px solid #e5e7eb; }
+    .header-top { background:#1f4a8f; color:#fff; padding:18px 20px; display:flex; gap:16px; justify-content:space-between; align-items:flex-start; }
+    .header-title { font-size:26px; font-weight:700; letter-spacing:0.08em; }
+    .header-meta { text-align:right; font-size:12px; line-height:1.4; }
+    .balance { background:#eef2ff; color:#0b1220; padding:8px 20px; text-align:right; font-weight:700; }
     table { width:100%; border-collapse:collapse; margin-top:12px; }
     th, td { border-top:1px solid #e5e7eb; padding:6px 8px; text-align:left; vertical-align:top; }
     .right { text-align:right; }
@@ -121,33 +133,36 @@ export async function GET(_: Request, { params }: { params: { id: string } }) {
     <button onclick="window.print()" style="border:1px solid #e5e7eb; padding:6px 10px; border-radius:6px">Print</button>
   </div>
 
-  <div class="row">
-    <div>
-      <h2>${biz.name || "Your Shop Name"}</h2>
-      ${biz.address ? `<div class="muted">${biz.address}</div>` : ""}
-      ${biz.gstin ? `<div>GSTIN: ${biz.gstin}</div>` : ""}
-      ${biz.phone ? `<div>Phone: ${biz.phone}</div>` : ""}
-    </div>
-    <div style="text-align:right">
-      ${biz.logo_url ? `<div><img class="logo" src="${biz.logo_url}" alt="Logo" /></div>` : ""}
-      <h3>Invoice</h3>
-      <div><b>No:</b> ${s.invoice_no ?? id}</div>
-      ${s.dc_no ? `<div><b>DC No:</b> ${s.dc_no}</div>` : ""}
-      <div><b>Date/Time:</b> ${fmtDateIST12h(displayDate)}</div>
-      ${s.patient_name ? `<div><b>Patient:</b> ${s.patient_name}</div>` : ""}
-      ${s.doctor_name ? `<div><b>Doctor:</b> ${s.doctor_name}</div>` : ""}
-      <div style="margin-top:6px">
-        ${
+  <div class="header">
+    <div class="header-top">
+      <div>
+        <div class="header-title">INVOICE</div>
+        <div style="margin-top:8px; font-weight:600;">${biz.name || "Your Shop Name"}</div>
+        ${biz.address ? `<div style="opacity:0.85">${biz.address}</div>` : ""}
+        ${biz.gstin ? `<div>GSTIN: ${biz.gstin}</div>` : ""}
+        ${biz.phone ? `<div>Phone: ${biz.phone}</div>` : ""}
+      </div>
+      <div class="header-meta">
+        ${biz.logo_url ? `<div><img class="logo" src="${biz.logo_url}" alt="Logo" /></div>` : ""}
+        <div><b>No:</b> ${s.invoice_no ?? id}</div>
+        ${s.dc_no ? `<div><b>DC No:</b> ${s.dc_no}</div>` : ""}
+        <div><b>Date/Time:</b> ${fmtDateIST12h(displayDate)}</div>
+        ${s.patient_name ? `<div><b>Patient:</b> ${s.patient_name}</div>` : ""}
+        ${s.doctor_name ? `<div><b>Doctor:</b> ${s.doctor_name}</div>` : ""}
+        <div style="margin-top:6px">
+            ${
           s.is_return
             ? `<span class="badge badge-return">RETURN</span>`
-            : Number(s.amount_paid || 0) >= Number(s.total || 0) - 0.01
+            : (s.payment_status || "").toLowerCase() === "paid"
             ? `<span class="badge badge-paid">PAID</span>`
-            : Number(s.amount_paid || 0) > 0
+            : (s.payment_status || "").toLowerCase() === "partial"
             ? `<span class="badge badge-partial">PARTIAL</span>`
             : `<span class="badge badge-pending">PENDING</span>`
         }
+        </div>
       </div>
     </div>
+    <div class="balance">Balance Due ${inr(balanceDue)}</div>
   </div>
 
   ${s.customer_name ? `
@@ -210,6 +225,9 @@ export async function GET(_: Request, { params }: { params: { id: string } }) {
       <div class="row" style="border-top:1px solid #e5e7eb; margin-top:6px; padding-top:6px">
         <span>Grand Total</span><b>${inr(s.total)}</b>
       </div>
+      <div class="row"><span>Amount Paid</span><b>${inr(s.amount_paid)}</b></div>
+      <div class="row"><span>Balance Due</span><b>${inr(s.pending_amount ?? Math.max(Number(s.total||0) - Number(s.amount_paid||0),0))}</b></div>
+      ${s.payment_method ? `<div class="row"><span>Method</span><b>${s.payment_method}</b></div>` : ''}
       ${
         biz.signature_name
           ? `<div style="margin-top:12px; text-align:right">

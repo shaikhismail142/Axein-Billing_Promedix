@@ -8,25 +8,25 @@
 @layer base {
   :root {
     /* Surfaces & text */
-    --bg:           #f3f8f8;         /* clean clinical white */
-    --surface-1:    rgba(255,255,255,0.96);
-    --surface-2:    rgba(255,255,255,0.82);
-    --text:         #0b1324;         /* deep navy */
-    --muted:        #5a6a79;         /* muted blue-gray */
+    --bg:           #f5f7fb;         /* airy light */
+    --surface-1:    rgba(255,255,255,0.98);
+    --surface-2:    rgba(248,250,252,0.92);
+    --text:         #0b1220;         /* deep navy */
+    --muted:        #56677a;         /* muted blue-gray */
     --popover-bg:   rgba(3,7,18,0.94);
     --popover-text: #ffffff;
 
     /* Brand */
-    --primary:      #0f9ba0;         /* teal-500 */
-    --primary-600:  #0e7170;         /* teal-700 */
+    --primary:      #1f4a8f;         /* navy blue */
+    --primary-600:  #173b75;         /* deeper navy */
     --success:      #16a34a;         /* green-600 */
     --warning:      #f59e0b;         /* amber-500 */
     --danger:       #ef4444;         /* red-500 */
 
     /* Borders & table */
-    --border:       rgba(15,23,42,0.14);
-    --thead:        rgba(230,242,245,0.96);
-    --thead-text:   #0b1324;
+    --border:       rgba(15,23,42,0.12);
+    --thead:        rgba(232,237,245,0.96);
+    --thead-text:   #0b1220;
 
     /* Effects */
     --shadow:       0 10px 26px rgba(2,6,23,0.10);
@@ -36,22 +36,22 @@
   }
 
   .dark {
-    --bg:           #0a1116;         /* deep teal slate */
-    --surface-1:    rgba(14,20,26,0.96);
-    --surface-2:    rgba(21,31,38,0.72);
-    --text:         #e9f1f6;
-    --muted:        #9fb0bf;
+    --bg:           #0b0f1a;         /* deep navy */
+    --surface-1:    rgba(16,23,42,0.96);
+    --surface-2:    rgba(24,35,52,0.78);
+    --text:         #e6edf5;
+    --muted:        #9aa7b3;
     --popover-bg:   rgba(3,7,18,0.96);
-    --popover-text: #e9f1f6;
+    --popover-text: #e6edf5;
 
-    --border:       rgba(148,163,184,0.32);
-    --thead:        rgba(10,16,20,0.94);
-    --thead-text:   #e6edf4;
+    --border:       rgba(148,163,184,0.26);
+    --thead:        rgba(15,22,36,0.96);
+    --thead-text:   #e6edf5;
 
     --shadow:       0 12px 36px rgba(0,0,0,0.55);
-    --glass-bg:     rgba(18,28,35,0.70);
-    --glass-brd:    rgba(148,163,184,0.28);
-    --ring:         color-mix(in oklab, var(--primary) 65%, transparent);
+    --glass-bg:     rgba(20,30,45,0.70);
+    --glass-brd:    rgba(148,163,184,0.24);
+    --ring:         color-mix(in oklab, var(--primary) 60%, transparent);
   }
 
   html { color-scheme: light dark; }
@@ -67,8 +67,8 @@
 
     /* subtle radial accents, balanced for both themes */
     background:
-      radial-gradient(900px 560px at 10% -10%, color-mix(in oklab, var(--primary) 12%, transparent), transparent 60%),
-      radial-gradient(820px 540px at 95% 0%, color-mix(in oklab, var(--success) 10%, transparent), transparent 60%),
+      radial-gradient(900px 560px at 10% -10%, color-mix(in oklab, var(--primary) 10%, transparent), transparent 60%),
+      radial-gradient(820px 540px at 95% 0%, color-mix(in oklab, var(--primary) 8%, transparent), transparent 60%),
       var(--bg);
     background-attachment: fixed;
   }
@@ -323,6 +323,60 @@ button:disabled { opacity: .6; cursor: not-allowed; }
 .table tbody tr:hover { background: color-mix(in oklab, var(--bg) 80%, var(--text) 8%); }
 .table th { font-weight: 700; color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .03em; }
 .table thead th { color: var(--thead-text); }
+
+/* =========================
+   DARK MODE LEGACY OVERRIDES
+   (helps pages still using Tailwind light tokens)
+   ========================= */
+.dark .bg-white,
+.dark .bg-white\/90,
+.dark .bg-white\/80,
+.dark .bg-white\/70,
+.dark .bg-white\/60,
+.dark .bg-white\/50,
+.dark .bg-white\/40,
+.dark .bg-white\/30,
+.dark .bg-white\/20,
+.dark .bg-white\/10,
+.dark .bg-white\/5 {
+  background-color: var(--surface-1) !important;
+}
+.dark .text-slate-900,
+.dark .text-gray-900,
+.dark .text-neutral-900,
+.dark .text-black {
+  color: var(--text) !important;
+}
+.dark .text-slate-700,
+.dark .text-slate-600,
+.dark .text-gray-700,
+.dark .text-gray-600,
+.dark .text-neutral-700,
+.dark .text-neutral-600 {
+  color: var(--muted) !important;
+}
+.dark .border-slate-200,
+.dark .border-slate-300,
+.dark .border-gray-200,
+.dark .border-gray-300,
+.dark .border-black\/5,
+.dark .border-black\/10,
+.dark .border-black\/20 {
+  border-color: var(--glass-brd) !important;
+}
+
+/* Light mode: prevent washed-out text on bright backgrounds */
+html:not(.dark) .text-slate-100,
+html:not(.dark) .text-slate-200,
+html:not(.dark) .text-slate-300,
+html:not(.dark) .text-gray-100,
+html:not(.dark) .text-gray-200,
+html:not(.dark) .text-gray-300,
+html:not(.dark) .text-neutral-100,
+html:not(.dark) .text-neutral-200,
+html:not(.dark) .text-neutral-300 {
+  color: var(--muted) !important;
+}
 
 /* =========================
    UTILITIES

@@ -42,10 +42,13 @@ export default async function PurchaseDetailPage({ params }: { params: { id: str
   const items = data.items || [];
   const meta = p?.meta || {};
   const vendor = meta.vendor_name || "-";
-  const paid = meta.paid ? "Paid" : "Unpaid";
+  const paidAmt = Number(p.amount_paid ?? meta.amount_paid ?? 0);
+  const totalAmt = Number(p.total_amount || meta?.totals?.total_amount || 0);
+  const pendingAmt = Number(p.pending_amount ?? Math.max(totalAmt - paidAmt, 0));
+  const payStatus = p.payment_status || (pendingAmt <= 0 ? "Paid" : paidAmt > 0 ? "Partial" : "Pending");
   const notes = meta.notes || "-";
   const date = p.invoice_date || p.created_at || "";
-  const total = Number(p.total_amount || meta?.totals?.total_amount || 0);
+  const total = totalAmt;
 
   return (
     <div className="p-4 md:p-6 space-y-6">
@@ -53,7 +56,7 @@ export default async function PurchaseDetailPage({ params }: { params: { id: str
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">Purchase #{String(p.id)}</h1>
           <p className="text-sm text-[color:var(--muted)]">
-            Vendor: <b>{vendor}</b> · {paid} · Date: {date ? new Date(date).toLocaleDateString("en-IN") : "-"} · Total: <b>{asINR(total)}</b>
+            Vendor: <b>{vendor}</b> · {payStatus} · Date: {date ? new Date(date).toLocaleDateString("en-IN") : "-"} · Total: <b>{asINR(total)}</b> · Outstanding: <b>{asINR(pendingAmt)}</b>
           </p>
         </div>
         <div className="flex gap-2">

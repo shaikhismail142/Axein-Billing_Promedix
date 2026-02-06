@@ -285,7 +285,7 @@ export default function SettingsPage() {
     update('logo_url', '');
   }
 
-  // ---------- Backup (TAR) ----------
+  // ---------- Backup (ZIP) ----------
   async function runBackup() {
     try {
       setBackupBusy(true);
@@ -332,7 +332,7 @@ export default function SettingsPage() {
       let offset = 0;
       for (const c of chunks) { merged.set(c, offset); offset += c.length; }
 
-      const blob = new Blob([merged.buffer], { type: 'application/x-tar' });
+      const blob = new Blob([merged.buffer], { type: 'application/zip' });
       triggerDownload(blob, res);
       setBackupMsg('✅ Backup downloaded. Check your Downloads folder.');
     } catch (e: any) {
@@ -349,7 +349,7 @@ export default function SettingsPage() {
     const cd = res.headers.get('Content-Disposition') || '';
     const m = cd.match(/filename="(.+?)"/);
     a.href = url;
-    a.download = m?.[1] || 'axein-backup.tar';
+    a.download = m?.[1] || 'axein-backup.zip';
     a.click();
     URL.revokeObjectURL(url);
   }
@@ -603,13 +603,13 @@ export default function SettingsPage() {
       <section className="rounded-2xl border bg-white p-4 shadow-sm dark:border-neutral-800 dark:bg-neutral-950">
         <h2 className="text-lg font-semibold">Admin • Backups</h2>
         <p className="mt-1 text-sm opacity-80">
-          Download a <strong>.tar</strong> archive (no password).<br />
+          Download a <strong>.zip</strong> archive (no password).<br />
           <strong>Restore behavior:</strong> records are <em>upserted</em> — existing rows with the same <code>id</code>/<code>key</code> are overwritten; missing rows are not deleted.
         </p>
 
         <div className="mt-3 flex gap-2">
           <button className="btn btn-primary" onClick={runBackup} disabled={backupBusy}>
-            {backupBusy ? 'Preparing…' : 'Download Backup (.tar)'}
+            {backupBusy ? 'Preparing…' : 'Download Backup (.zip)'}
           </button>
         </div>
 
@@ -633,9 +633,9 @@ export default function SettingsPage() {
           </div>
         )}
 
-        <h3 className="mt-5 text-base font-semibold">Restore from Backup (.tar)</h3>
+        <h3 className="mt-5 text-base font-semibold">Restore from Backup (.zip)</h3>
         <ol className="mt-1 list-decimal pl-5 text-sm opacity-80">
-          <li>Select the backup <strong>.tar</strong> file</li>
+          <li>Select the backup <strong>.zip</strong> file</li>
           <li>Click <strong>Validate</strong> to inspect contents</li>
           <li>Click <strong>Apply Restore</strong> to upsert records</li>
         </ol>
@@ -643,7 +643,7 @@ export default function SettingsPage() {
         <input
           ref={fileRef}
           type="file"
-          accept=".tar,application/x-tar"
+          accept=".zip,application/zip"
           className="input mt-2"
         />
         <div className="mt-2 flex gap-2">
@@ -651,13 +651,13 @@ export default function SettingsPage() {
             className="btn"
             onClick={async () => {
               const f = fileRef.current?.files?.[0];
-              if (!f) return alert('Choose a .tar file first');
-              if (!f.name.endsWith('.tar')) return alert('Selected file is not a .tar archive');
+              if (!f) return alert('Choose a .zip file first');
+              if (!f.name.endsWith('.zip')) return alert('Selected file is not a .zip archive');
               try {
                 const ab = await f.arrayBuffer();
                 const res = await fetch('/api/admin/restore?apply=false', {
                   method: 'POST',
-                  headers: { 'x-admin': '1', 'Content-Type': 'application/x-tar' },
+                  headers: { 'x-admin': '1', 'Content-Type': 'application/zip' },
                   body: ab,
                 });
                 const text = await res.text();
@@ -676,13 +676,13 @@ export default function SettingsPage() {
             className="btn btn-primary"
             onClick={async () => {
               const f = fileRef.current?.files?.[0];
-              if (!f) return alert('Choose a .tar file first');
-              if (!f.name.endsWith('.tar')) return alert('Selected file is not a .tar archive');
+              if (!f) return alert('Choose a .zip file first');
+              if (!f.name.endsWith('.zip')) return alert('Selected file is not a .zip archive');
               try {
                 const ab = await f.arrayBuffer();
                 const res = await fetch('/api/admin/restore?apply=true', {
                   method: 'POST',
-                  headers: { 'x-admin': '1', 'Content-Type': 'application/x-tar' },
+                  headers: { 'x-admin': '1', 'Content-Type': 'application/zip' },
                   body: ab,
                 });
                 const text = await res.text();
@@ -703,9 +703,20 @@ export default function SettingsPage() {
             <ul className="ml-5 list-disc">
               <li>manifest.json: {restoreReport.hasManifest ? '✅' : '❌'}</li>
               <li>db/customers.csv: {restoreReport.hasCustomers ? '✅' : '❌'}</li>
+              <li>db/categories.csv: {restoreReport.hasCategories ? '✅' : '❌'}</li>
               <li>db/products.csv: {restoreReport.hasProducts ? '✅' : '❌'}</li>
+              <li>db/suppliers.csv: {restoreReport.hasSuppliers ? '✅' : '❌'}</li>
+              <li>db/purchases.csv: {restoreReport.hasPurchases ? '✅' : '❌'}</li>
+              <li>db/purchase_items.csv: {restoreReport.hasPurchaseItems ? '✅' : '❌'}</li>
+              <li>db/quotations.csv: {restoreReport.hasQuotations ? '✅' : '❌'}</li>
+              <li>db/quotation_items.csv: {restoreReport.hasQuotationItems ? '✅' : '❌'}</li>
               <li>db/sales.csv: {restoreReport.hasSales ? '✅' : '❌'}</li>
               <li>db/sale_items.csv: {restoreReport.hasSaleItems ? '✅' : '❌'}</li>
+              <li>db/product_batches.csv: {restoreReport.hasBatches ? '✅' : '❌'}</li>
+              <li>db/stock_movements.csv: {restoreReport.hasMovements ? '✅' : '❌'}</li>
+              <li>db/inventory_adjustments.csv: {restoreReport.hasAdjustments ? '✅' : '❌'}</li>
+              <li>db/inventory_adjustment_items.csv: {restoreReport.hasAdjustmentItems ? '✅' : '❌'}</li>
+              <li>db/notifications.csv: {restoreReport.hasNotifications ? '✅' : '❌'}</li>
               <li>db/settings.json: {restoreReport.hasSettings ? '✅' : '❌'}</li>
               <li>invoice PDFs: {restoreReport.invoicesPdfCount}</li>
             </ul>

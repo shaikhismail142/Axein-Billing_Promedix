@@ -6,10 +6,8 @@ import PDFDocument from 'pdfkit';
 import { stringify as csvStringify } from 'csv-stringify';
 import fs from 'node:fs';
 import path from 'node:path';
-
-// TAR packer (in-memory)
-// eslint-disable-next-line @typescript-eslint/no-var-requires
-const tar = require('tar-stream');
+import archiver from 'archiver';
+import { PassThrough } from 'node:stream';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -125,21 +123,31 @@ async function makeInvoicePdf(pool: PgLike, saleId: string): Promise<Buffer> {
   });
 }
 
+async function tableExists(pool: PgLike, table: string): Promise<boolean> {
+  const { rows } = await pool.query(
+    `SELECT to_regclass($1) AS reg`,
+    [`public.${table}`]
+  );
+  return !!rows?.[0]?.reg;
+}
+
 export async function POST(req: NextRequest) {
   try {
     if (!(await isAdmin(req))) return new Response('Forbidden', { status: 403 });
 
     const pool: PgLike = getDb();
 
-    // 1) Create a tar pack and collect bytes (Uint8Array[])
-    const pack = tar.pack();
-    const chunks: Uint8Array[] = [];
-    let total = 0;
-    pack.on('data', (c: Uint8Array) => { chunks.push(c); total += c.length; });
+    // 1) Create a zip archive in-memory
+    const archive = archiver('zip', { zlib: { level: 9 } });
+    const stream = new PassThrough();
+    const chunks: Buffer[] = [];
+    stream.on('data', (c) => chunks.push(Buffer.from(c)));
     const done = new Promise<void>((resolve, reject) => {
-      pack.on('end', resolve);
-      pack.on('error', reject);
+      stream.on('end', resolve);
+      stream.on('error', reject);
+      archive.on('error', reject);
     });
+    archive.pipe(stream);
 
     // 2) Add manifest
     const startedAt = new Date().toISOString();
@@ -148,56 +156,67 @@ export async function POST(req: NextRequest) {
       version: 2,
       started_at: startedAt,
       app_tz: 'Asia/Kolkata',
-      format: 'tar',
+      format: 'zip',
       includes: ['db csv', 'invoice pdfs'],
     }, null, 2));
-    pack.entry({ name: 'manifest.json', size: manifest.length, mode: 0o644 }, manifest);
+    archive.append(manifest, { name: 'manifest.json' });
 
-    // 3) DB CSVs
-    const customers = await tableToCsv(pool, 'SELECT * FROM customers ORDER BY id');
-    pack.entry({ name: 'db/customers.csv', size: customers.length, mode: 0o644 }, customers);
+    // 3) DB CSVs (only if tables exist)
+    const tables = [
+      'customers',
+      'categories',
+      'products',
+      'suppliers',
+      'purchases',
+      'purchase_items',
+      'quotations',
+      'quotation_items',
+      'sales',
+      'sale_items',
+      'product_batches',
+      'stock_movements',
+      'inventory_adjustments',
+      'inventory_adjustment_items',
+      'notifications',
+    ];
 
-    const products = await tableToCsv(pool, 'SELECT * FROM products ORDER BY id');
-    pack.entry({ name: 'db/products.csv', size: products.length, mode: 0o644 }, products);
-
-    const sales = await tableToCsv(pool, 'SELECT * FROM sales ORDER BY id');
-    pack.entry({ name: 'db/sales.csv', size: sales.length, mode: 0o644 }, sales);
-
-    const items = await tableToCsv(pool, 'SELECT * FROM sale_items ORDER BY id');
-    pack.entry({ name: 'db/sale_items.csv', size: items.length, mode: 0o644 }, items);
+    for (const table of tables) {
+      if (!(await tableExists(pool, table))) continue;
+      try {
+        const csv = await tableToCsv(pool, `SELECT * FROM ${table}`);
+        archive.append(csv, { name: `db/${table}.csv` });
+      } catch (e: any) {
+        logLine(`backup: table ${table} failed (${e?.message || e})`);
+      }
+    }
 
     const { rows: settings } = await pool.query('SELECT key, value_json FROM settings ORDER BY key');
     const settingsBuf = Buffer.from(JSON.stringify(settings, null, 2));
-    pack.entry({ name: 'db/settings.json', size: settingsBuf.length, mode: 0o644 }, settingsBuf);
+    archive.append(settingsBuf, { name: 'db/settings.json' });
 
     // 4) Invoice PDFs (best effort)
     const { rows: saleIds } = await pool.query('SELECT id FROM sales ORDER BY id');
     for (const r of saleIds as Array<{ id: string }>) {
       try {
         const pdf = await makeInvoicePdf(pool, r.id);
-        pack.entry({ name: `invoices/${r.id}.pdf`, size: pdf.length, mode: 0o644 }, pdf);
+        archive.append(pdf, { name: `invoices/${r.id}.pdf` });
       } catch (e: any) {
         logLine(`invoice ${r.id} pdf fail: ${e.message}`);
       }
     }
 
     // 5) Finalize & wait
-    pack.finalize();
+    await archive.finalize();
     await done;
 
-    // Merge chunks into a single Uint8Array (NOT a Node Buffer)
-    const tarBytes = new Uint8Array(total);
-    let off = 0; for (const c of chunks) { tarBytes.set(c, off); off += c.length; }
+    const zipBytes = Buffer.concat(chunks);
+    const filename = `axein-backup-${istStamp()}.zip`;
 
-    // ✅ BodyInit-friendly response: Blob (or you can pass tarBytes directly)
-    const blob = new Blob([tarBytes.buffer], { type: 'application/x-tar' });
-    const filename = `axein-backup-${istStamp()}.tar`;
-
-    return new Response(blob, {
+    return new Response(zipBytes, {
       status: 200,
       headers: {
-        'Content-Type': 'application/x-tar',
-        'Content-Length': String(tarBytes.byteLength),
+        'Content-Type': 'application/zip',
+        'Content-Length': String(zipBytes.byteLength),
         'Content-Disposition': `attachment; filename="${filename}"`,
         'Cache-Control': 'no-store',
       },

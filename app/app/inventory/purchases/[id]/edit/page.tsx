@@ -33,6 +33,8 @@ async function patchPurchase(formData: FormData) {
   const invoice_date = String(formData.get("invoice_date") || "").trim();
   const notes        = String(formData.get("notes") || "").trim();
   const paid         = formData.get("paid") === "1";
+  const amount_paid  = Number(formData.get("amount_paid") || 0);
+  const payment_method = String(formData.get("payment_method") || "").trim();
 
   let items: any[] = [];
   try { items = JSON.parse(String(formData.get("items_json") || "[]")); } catch {}
@@ -52,13 +54,15 @@ async function patchPurchase(formData: FormData) {
     .filter((it: any) => it.product_id && it.qty > 0);
 
   try {
-    const res = await fetch(`${origin}/api/purchases/${id}`, {
+        const res = await fetch(`${origin}/api/purchases/${id}`, {
       method: "PATCH",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
         invoice_no: invoice_no || null,
         invoice_date: invoice_date || null,
-        meta: { vendor_name, notes, paid },
+        amount_paid,
+        payment_method: payment_method || null,
+        meta: { vendor_name, notes, paid, amount_paid, payment_method: payment_method || null },
         items: normalized,
       }),
       cache: "no-store",
@@ -103,6 +107,8 @@ export default async function EditPurchasePage({
   const vendor = meta.vendor_name || "";
   const paid = !!meta.paid;
   const notes = meta.notes || "";
+  const amountPaid = Number(p.amount_paid ?? meta.amount_paid ?? 0);
+  const paymentMethod = p.payment_method ?? meta.payment_method ?? "";
   const invDate =
     p.invoice_date ? String(p.invoice_date).slice(0, 10) : "";
 
@@ -130,7 +136,7 @@ export default async function EditPurchasePage({
         <form action={patchPurchase} className="space-y-6">
           <input type="hidden" name="id" value={String(p.id)} />
 
-          <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
+          <div className="grid grid-cols-1 md:grid-cols-5 gap-3">
             <label className="text-sm">
               <span className="block mb-1 text-[color:var(--muted)]">Vendor Name</span>
               <input
@@ -155,6 +161,31 @@ export default async function EditPurchasePage({
                 defaultValue={invDate}
                 className="w-full rounded-xl border border-black/10 bg-white/70 px-3 py-2 outline-none focus:ring-2 focus:ring-black/10"
               />
+            </label>
+            <label className="text-sm">
+              <span className="block mb-1 text-[color:var(--muted)]">Amount Paid</span>
+              <input
+                name="amount_paid"
+                type="number"
+                step="0.01"
+                defaultValue={amountPaid}
+                className="w-full rounded-xl border border-black/10 bg-white/70 px-3 py-2 outline-none focus:ring-2 focus:ring-black/10"
+              />
+            </label>
+            <label className="text-sm">
+              <span className="block mb-1 text-[color:var(--muted)]">Payment Method</span>
+              <select
+                name="payment_method"
+                defaultValue={paymentMethod}
+                className="w-full rounded-xl border border-black/10 bg-white/70 px-3 py-2 outline-none focus:ring-2 focus:ring-black/10"
+              >
+                <option value="">Select</option>
+                <option value="cash">Cash</option>
+                <option value="upi">UPI</option>
+                <option value="card">Card</option>
+                <option value="bank">Bank</option>
+                <option value="split">Split</option>
+              </select>
             </label>
             <label className="text-sm inline-flex items-center gap-2 mt-6">
               <input

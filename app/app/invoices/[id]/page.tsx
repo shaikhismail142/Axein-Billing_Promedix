@@ -15,6 +15,9 @@ type Sale = {
   tax_total: number | null;
   total: number | null;
   amount_paid: number;
+  pending_amount: number;
+  payment_status?: string | null;
+  payment_method?: string | null;
   customer_name: string | null;
   patient_name?: string | null;
   doctor_name?: string | null;
@@ -54,7 +57,11 @@ export default async function InvoicePage({ params }: { params: { id: string } }
   // Header
   const saleRs = await pool.query(
     `SELECT s.id, s.invoice_no, s.invoice_date, s.subtotal, s.tax_total, s.total,
-            COALESCE((s.meta->>'amount_paid')::numeric, 0) AS amount_paid,
+            COALESCE(s.amount_paid, (s.meta->>'amount_paid')::numeric, 0) AS amount_paid,
+            COALESCE(s.pending_amount,
+                     GREATEST(s.total - COALESCE(s.amount_paid, (s.meta->>'amount_paid')::numeric, 0), 0)) AS pending_amount,
+            COALESCE(NULLIF(s.payment_status,''), (s.meta->>'payment_status')) AS payment_status,
+            COALESCE(NULLIF(s.payment_method,''), (s.meta->>'payment_method')) AS payment_method,
             (s.meta->>'patient_name') AS patient_name,
             (s.meta->>'doctor_name')  AS doctor_name,
             (s.meta->>'dc_no')        AS dc_no,
@@ -89,7 +96,8 @@ export default async function InvoicePage({ params }: { params: { id: string } }
   const taxTotal = toNum(s.tax_total, 0);
   const grand = toNum(s.total, 0);
   const amountPaid = toNum(s.amount_paid, 0);
-  const balance = Math.max(0, grand - amountPaid);
+  const balance = toNum(s.pending_amount ?? Math.max(0, grand - amountPaid), 0);
+  const paymentStatus = s.payment_status || (amountPaid >= grand - 0.01 ? "Paid" : amountPaid > 0 ? "Partial" : "Pending");
 
   return (
     <div className="p-6 space-y-4">
@@ -205,8 +213,12 @@ export default async function InvoicePage({ params }: { params: { id: string } }
         <div className="text-sm">
           <span className="font-medium">Amount Paid:</span> {inr(amountPaid)}
         </div>
-        <div className="text-sm text-emerald-700 font-semibold">
-          Balance {inr(balance)}
+        <div className="text-sm">
+          <span className="font-medium">Pending:</span> {inr(balance)}
+        </div>
+        <div className="text-sm">
+          <span className="font-medium">Payment Status:</span> {paymentStatus}
+          {s.payment_method ? ` • ${s.payment_method}` : ""}
         </div>
       </div>
     </div>

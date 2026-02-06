@@ -29,6 +29,8 @@ export type PurchaseCreateIn = {
   purchase_date?: string | null; // YYYY-MM-DD
   notes?: string | null;
   paid?: boolean;
+  amount_paid?: number | string | null;
+  payment_method?: string | null;
   add_to_inventory?: boolean;
   items: ItemIn[];
 };
@@ -113,6 +115,18 @@ export async function GET(req: NextRequest) {
         (cols.has("grand_total") ? "grand_total::text" : "'0'::text AS total_amount"),
       cols.has("total_tax") ? "total_tax::text" :
         (cols.has("tax_total") ? "tax_total::text" : "'0'::text AS total_tax"),
+      cols.has("amount_paid")
+        ? "amount_paid::text"
+        : "COALESCE((meta->>'amount_paid')::text, '0') AS amount_paid",
+      cols.has("pending_amount")
+        ? "pending_amount::text"
+        : "NULL AS pending_amount",
+      cols.has("payment_status")
+        ? "payment_status"
+        : "COALESCE(meta->>'payment_status', NULL) AS payment_status",
+      cols.has("payment_method")
+        ? "payment_method"
+        : "COALESCE(meta->>'payment_method', NULL) AS payment_method",
       cols.has("status") ? "status" : "NULL AS status",
       cols.has("meta") ? "meta" : "'{}'::jsonb AS meta",
       cols.has("created_at") ? "created_at" : "now() AS created_at",
@@ -195,11 +209,21 @@ export async function POST(req: NextRequest) {
     const discount_total = body.items.reduce((a, it) => a + normMoney(it.discount), 0);
     const total_amount = subtotal + total_tax - discount_total;
 
+    const amount_paid = normMoney(body.amount_paid ?? (body.paid ? total_amount : 0));
+    const pending_amount = Math.max(0, normMoney(total_amount - amount_paid));
+    const payment_status =
+      amount_paid >= total_amount - 0.01 ? "Paid" : amount_paid > 0 ? "Partial" : "Pending";
+    const payment_method = body.payment_method ? String(body.payment_method) : null;
+
     const meta: any = {
       vendor_name: body.vendor_name || null,
       notes: body.notes || null,
-      paid: !!body.paid,
+      paid: !!body.paid || payment_status === "Paid",
       posted: !!body.add_to_inventory,
+      amount_paid,
+      pending_amount,
+      payment_status,
+      payment_method,
     };
     if (!purchasesCols.has("invoice_no") && !purchasesCols.has("bill_no")) meta.invoice_no = invoice_no;
     if (!purchasesCols.has("invoice_date") && !purchasesCols.has("bill_date") && invoice_date) meta.invoice_date = invoice_date;
@@ -229,6 +253,10 @@ export async function POST(req: NextRequest) {
     if (purchasesCols.has("tax_total"))    { pCols.push("tax_total");    pVals.push(total_tax);    pPh.push(`$${i++}`); }
     if (purchasesCols.has("subtotal"))     { pCols.push("subtotal");     pVals.push(subtotal);     pPh.push(`$${i++}`); }
     if (purchasesCols.has("discount_total")) { pCols.push("discount_total"); pVals.push(discount_total); pPh.push(`$${i++}`); }
+    if (purchasesCols.has("amount_paid")) { pCols.push("amount_paid"); pVals.push(amount_paid); pPh.push(`$${i++}`); }
+    if (purchasesCols.has("pending_amount")) { pCols.push("pending_amount"); pVals.push(pending_amount); pPh.push(`$${i++}`); }
+    if (purchasesCols.has("payment_status")) { pCols.push("payment_status"); pVals.push(payment_status); pPh.push(`$${i++}`); }
+    if (purchasesCols.has("payment_method")) { pCols.push("payment_method"); pVals.push(payment_method); pPh.push(`$${i++}`); }
 
     if (purchasesCols.has("meta")) { pCols.push("meta"); pVals.push(meta); pPh.push(`$${i++}`); }
     if (purchasesCols.has("status")) { pCols.push("status"); pVals.push(body.add_to_inventory ? "applied" : "draft"); pPh.push(`$${i++}`); }

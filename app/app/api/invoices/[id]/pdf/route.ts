@@ -16,8 +16,13 @@ type Sale = {
   total: number | null;
   customer_name: string | null;
   amount_paid: number;
+  pending_amount?: number;
+  payment_status?: string | null;
+  payment_method?: string | null;
   notes: string | null;
   terms: string | null; // ⬅️ NEW: read from s.meta->>'terms'
+  extra_label?: string | null;
+  extra_amount?: number | null;
   patient_name?: string | null;
   doctor_name?: string | null;
   dc_no?: string | null;
@@ -151,9 +156,15 @@ export async function GET(req: Request, { params }: { params: { id: string } }) 
   // ---- Sale & items ----
   const saleRs = await pool.query(
     `SELECT s.id, s.invoice_no, s.invoice_date, s.subtotal, s.tax_total, s.total,
-            COALESCE((s.meta->>'amount_paid')::numeric, 0) AS amount_paid,
+            COALESCE(s.amount_paid, (s.meta->>'amount_paid')::numeric, 0) AS amount_paid,
+            COALESCE(s.pending_amount,
+                     GREATEST(s.total - COALESCE(s.amount_paid, (s.meta->>'amount_paid')::numeric, 0), 0)) AS pending_amount,
+            COALESCE(NULLIF(s.payment_status,''), (s.meta->>'payment_status')) AS payment_status,
+            COALESCE(NULLIF(s.payment_method,''), (s.meta->>'payment_method')) AS payment_method,
             (s.meta->>'notes') AS notes,
             (s.meta->>'terms') AS terms,
+            (s.meta->>'extra_label') AS extra_label,
+            COALESCE((s.meta->>'extra_amount')::numeric, 0) AS extra_amount,
             (s.meta->>'patient_name') AS patient_name,
             (s.meta->>'doctor_name')  AS doctor_name,
             (s.meta->>'dc_no')        AS dc_no,
@@ -203,6 +214,12 @@ export async function GET(req: Request, { params }: { params: { id: string } }) 
     (sale.terms && sale.terms.trim()) ||
     (invDefaults.terms_default && invDefaults.terms_default.trim()) ||
     null;
+
+  const amountPaid = toNum(sale.amount_paid, 0);
+  const balance = toNum(
+    sale.pending_amount ?? Math.max(0, toNum(sale.total, 0) - amountPaid),
+    Math.max(0, toNum(sale.total, 0) - amountPaid)
+  );
 
   // ---- PDF setup ----
   const doc = new PDFDocument({ size: "A4", margin: MARGIN, bufferPages: true });
@@ -307,6 +324,18 @@ export async function GET(req: Request, { params }: { params: { id: string } }) 
     doc.fillColor("#000");
   };
   renderPageHeader();
+
+  // Balance due bar (matches improved print styling)
+  const barH = 18;
+  doc.save()
+    .rect(MARGIN, doc.y, contentW, barH)
+    .fill("#eef2ff");
+  doc.fillColor("#0b1220")
+    .font("Helvetica-Bold")
+    .fontSize(FS_BASE + 1)
+    .text(`Balance Due ${inr(balance)}`, MARGIN, doc.y + 4, { width: contentW - 8, align: "right" });
+  doc.restore();
+  doc.y += barH + 10;
 
   // ---------- Table (full width; centered cells; equal numeric widths) ----------
   const tableX = MARGIN;
@@ -465,18 +494,21 @@ export async function GET(req: Request, { params }: { params: { id: string } }) 
   const taxable = toNum(sale.subtotal, 0);
   const taxTotal = toNum(sale.tax_total, 0);
   const grand = toNum(sale.total, 0);
+  const extraAmount = toNum((sale as any).extra_amount, 0);
+  const extraLabel = ((sale as any).extra_label || "").toString().trim() || "Additional Charge";
 
-  // Default prints to paid-in-full unless explicit amount stored
-  const amountPaidRaw = toNum(sale.amount_paid, 0);
-  const amountPaid = Math.min(grand, amountPaidRaw > 0 ? amountPaidRaw : grand);
-  const balance = Math.max(0, grand - amountPaid);
+  // (amountPaid / balance already computed above)
 
   const cardW = 330;
   const cardX = tableX + tableW - cardW;
   const cardPad = 12;
 
-  // dynamic height (Taxable+Tax+Grand+Paid+Balance + note)
-  const rowsCount = 5;
+  // dynamic height (Taxable+Tax+Grand+Paid+Balance+Method + note)
+  const rowsCount =
+    3 + // taxable, tax, grand
+    (extraAmount > 0 ? 1 : 0) +
+    2 + // paid, balance
+    (sale.payment_method ? 1 : 0);
   const cardH = rowsCount * 18 + 24 + 18;
 
   let cy = y + 14;
@@ -500,11 +532,17 @@ export async function GET(req: Request, { params }: { params: { id: string } }) 
 
   totalRow("Taxable",    inr(taxable));
   totalRow("Tax",        inr(taxTotal));
+  if (extraAmount > 0) {
+    totalRow(extraLabel, inr(extraAmount));
+  }
   doc.strokeColor("#d1d5db").moveTo(cardX + cardPad, cy + 6).lineTo(cardX + cardW - cardPad, cy + 6).stroke();
   cy += 8;
   totalRow("Grand Total", inr(grand), true);
   totalRow("Amount Paid", inr(amountPaid));
-  totalRow("Balance",     inr(balance), true, balance === 0 ? "#065f46" : "#111");
+  totalRow("Balance Due", inr(balance), true, balance === 0 ? "#065f46" : "#111");
+  if (sale.payment_method) {
+    totalRow("Method", String(sale.payment_method || ""));
+  }
 
   cy += 6;
   doc.font("Helvetica").fontSize(FS_SMALL).fillColor("#6b7280")

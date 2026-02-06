@@ -22,7 +22,26 @@ export async function PATCH(_req: Request, { params }: { params: { id: string } 
     if (body.amount_paid !== undefined) meta.amount_paid = Number(body.amount_paid || 0);
     if (typeof body.notes === "string") meta.notes = body.notes;
 
-    await client.query(`UPDATE sales SET meta=$2, updated_at=now() WHERE id=$1`, [id, meta]);
+    // Update payment columns if present
+    let paid = Number(meta.amount_paid || 0);
+    if (!Number.isFinite(paid)) paid = 0;
+    const saleRow = await client.query(`SELECT total FROM sales WHERE id=$1`, [id]);
+    const total = Number(saleRow.rows?.[0]?.total || 0);
+    const pending = Math.max(total - paid, 0);
+    const status = paid >= total - 0.01 ? "Paid" : paid > 0 ? "Partial" : "Pending";
+    meta.pending_amount = pending;
+    meta.payment_status = status;
+
+    try {
+      await client.query(
+        `UPDATE sales
+           SET amount_paid=$2, pending_amount=$3, payment_status=$4, meta=$5, updated_at=now()
+         WHERE id=$1`,
+        [id, paid, pending, status, meta]
+      );
+    } catch {
+      await client.query(`UPDATE sales SET meta=$2, updated_at=now() WHERE id=$1`, [id, meta]);
+    }
     await client.query("COMMIT");
     return NextResponse.json({ ok: true });
   } catch (e: any) {

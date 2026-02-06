@@ -59,6 +59,7 @@ export default function AppHeader() {
               <NavLink href="/inventory" label="Inventory" />
               <NavLink href="/invoices" label="Invoices" />
               <NavLink href="/reports" label="Reports" />
+              <NavLink href="/accounting" label="Accounting" />
               <NavLink href="/settings" label="Settings" />
             </nav>
 
@@ -103,6 +104,7 @@ export default function AppHeader() {
                 <NavLink href="/inventory" label="Inventory" />
                 <NavLink href="/invoices" label="Invoices" />
                 <NavLink href="/reports" label="Reports" />
+                <NavLink href="/accounting" label="Accounting" />
                 <NavLink href="/settings" label="Settings" />
               </div>
             </nav>

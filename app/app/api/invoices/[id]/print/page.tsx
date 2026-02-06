@@ -25,8 +25,15 @@ export default async function PrintInvoice({ params }: { params: { id: string } 
     `SELECT s.id, s.invoice_no, s.customer_id, s.subtotal, s.tax_total, s.total,
             s.created_at, s.invoice_date,
             COALESCE((s.meta->>'is_return')::boolean, false)   AS is_return,
-            COALESCE((s.meta->>'amount_paid')::numeric, 0)     AS amount_paid,
+            COALESCE(s.amount_paid, (s.meta->>'amount_paid')::numeric, 0)     AS amount_paid,
+            COALESCE(s.pending_amount,
+                     GREATEST(s.total - COALESCE(s.amount_paid, (s.meta->>'amount_paid')::numeric, 0), 0)) AS pending_amount,
+            COALESCE(NULLIF(s.payment_status,''), (s.meta->>'payment_status')) AS payment_status,
+            COALESCE(NULLIF(s.payment_method,''), (s.meta->>'payment_method')) AS payment_method,
             (s.meta->>'notes')                                  AS notes,
+            (s.meta->>'terms')                                  AS terms,
+            (s.meta->>'extra_label')                            AS extra_label,
+            COALESCE((s.meta->>'extra_amount')::numeric, 0)     AS extra_amount,
             (s.meta->>'patient_name')                            AS patient_name,
             (s.meta->>'doctor_name')                             AS doctor_name,
             (s.meta->>'dc_no')                                   AS dc_no,
@@ -63,6 +70,12 @@ export default async function PrintInvoice({ params }: { params: { id: string } 
     )
   ).rows as any[];
 
+  const balanceDue = Number(
+    s.pending_amount ?? Math.max(Number(s.total || 0) - Number(s.amount_paid || 0), 0)
+  );
+
+  const extraAmount = Number(s.extra_amount || 0);
+
   return (
     <html>
       <head>
@@ -73,6 +86,11 @@ export default async function PrintInvoice({ params }: { params: { id: string } 
           h1,h2,h3 { margin: 0; }
           .row { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; }
           .muted { color: #64748b; }
+          .header { border-radius: 16px; overflow: hidden; border: 1px solid #e5e7eb; }
+          .header-top { background: #1f4a8f; color: #fff; padding: 18px 20px; display: flex; gap: 16px; justify-content: space-between; align-items: flex-start; }
+          .header-title { font-size: 26px; font-weight: 700; letter-spacing: 0.08em; }
+          .header-meta { text-align: right; font-size: 12px; line-height: 1.4; }
+          .balance { background: #eef2ff; color: #0b1220; padding: 8px 20px; text-align: right; font-weight: 700; }
           table { width: 100%; border-collapse: collapse; margin-top: 12px; }
           th, td { border-top: 1px solid #e5e7eb; padding: 6px 8px; text-align: left; vertical-align: top; }
           .right { text-align: right; }
@@ -107,32 +125,40 @@ export default async function PrintInvoice({ params }: { params: { id: string } 
           />
         </div>
 
-        <div className="row">
-          <div>
-            <h2>{biz.name || "Your Shop Name"}</h2>
-            {biz.address && <div className="muted">{biz.address}</div>}
-            {biz.gstin && <div>GSTIN: {biz.gstin}</div>}
-            {biz.phone && <div>Phone: {biz.phone}</div>}
-          </div>
-          <div style={{ textAlign: "right" }}>
-            <h3>Invoice</h3>
-            <div><b>No:</b> {s.invoice_no || id}</div>
-            {s.dc_no && <div><b>DC No:</b> {s.dc_no}</div>}
-            <div><b>Date/Time:</b> {fmtDateIST12h(s.invoice_date || s.created_at)}</div>
-            {s.patient_name && <div><b>Patient:</b> {s.patient_name}</div>}
-            {s.doctor_name && <div><b>Doctor:</b> {s.doctor_name}</div>}
-            <div style={{ marginTop: 6 }}>
-              {s.is_return ? (
-                <span className="badge badge-return">RETURN</span>
-              ) : Number(s.amount_paid || 0) >= Number(s.total || 0) - 0.01 ? (
-                <span className="badge badge-paid">PAID</span>
-              ) : Number(s.amount_paid || 0) > 0 ? (
-                <span className="badge badge-partial">PARTIAL</span>
-              ) : (
-                <span className="badge badge-pending">PENDING</span>
+        <div className="header">
+          <div className="header-top">
+            <div>
+              <div className="header-title">INVOICE</div>
+              <div style={{ marginTop: 8, fontWeight: 600 }}>{biz.name || "Your Shop Name"}</div>
+              {biz.address && <div style={{ opacity: 0.85 }}>{biz.address}</div>}
+              {biz.gstin && <div>GSTIN: {biz.gstin}</div>}
+              {biz.phone && <div>Phone: {biz.phone}</div>}
+            </div>
+            <div className="header-meta">
+              {biz.logo_url && (
+                <div style={{ marginBottom: 6 }}>
+                  <img src={biz.logo_url} alt="Logo" style={{ height: 48, objectFit: "contain" }} />
+                </div>
               )}
+              <div><b>No:</b> {s.invoice_no || id}</div>
+              {s.dc_no && <div><b>DC No:</b> {s.dc_no}</div>}
+              <div><b>Date/Time:</b> {fmtDateIST12h(s.invoice_date || s.created_at)}</div>
+              {s.patient_name && <div><b>Patient:</b> {s.patient_name}</div>}
+              {s.doctor_name && <div><b>Doctor:</b> {s.doctor_name}</div>}
+              <div style={{ marginTop: 6 }}>
+                {s.is_return ? (
+                  <span className="badge badge-return">RETURN</span>
+                ) : (s.payment_status || "").toLowerCase() === "paid" ? (
+                  <span className="badge badge-paid">PAID</span>
+                ) : (s.payment_status || "").toLowerCase() === "partial" ? (
+                  <span className="badge badge-partial">PARTIAL</span>
+                ) : (
+                  <span className="badge badge-pending">PENDING</span>
+                )}
+              </div>
             </div>
           </div>
+          <div className="balance">Balance Due {inr(balanceDue)}</div>
         </div>
 
         {s.customer_name && (
@@ -191,11 +217,34 @@ export default async function PrintInvoice({ params }: { params: { id: string } 
           <div className="box">
             <div className="row"><span>Taxable</span><b>{inr(s.subtotal)}</b></div>
             <div className="row"><span>Tax</span><b>{inr(s.tax_total)}</b></div>
+            {extraAmount > 0 && (
+              <div className="row"><span>{s.extra_label || "Additional Charge"}</span><b>{inr(extraAmount)}</b></div>
+            )}
             <div className="row" style={{ borderTop: "1px solid #e5e7eb", marginTop: 6, paddingTop: 6 }}>
               <span>Grand Total</span><b>{inr(s.total)}</b>
             </div>
+            <div className="row"><span>Amount Paid</span><b>{inr(s.amount_paid)}</b></div>
+            <div className="row"><span>Balance Due</span><b>{inr(s.pending_amount ?? Math.max(Number(s.total||0) - Number(s.amount_paid||0),0))}</b></div>
+            {s.payment_method && <div className="row"><span>Method</span><b>{s.payment_method}</b></div>}
+            {(biz.signature_name || biz.signature_title || biz.signature_image_url) && (
+              <div style={{ marginTop: 10, textAlign: "right" }}>
+                {biz.signature_image_url && (
+                  <img src={biz.signature_image_url} alt="Signature" style={{ height: 60, objectFit: "contain" }} />
+                )}
+                {biz.signature_name && <div><b>{biz.signature_name}</b></div>}
+                {biz.signature_title && <div className="muted">{biz.signature_title}</div>}
+              </div>
+            )}
           </div>
         </div>
+
+        {(s.notes || s.terms) && (
+          <div style={{ marginTop: 12 }}>
+            <b>Notes / Terms</b>
+            {s.notes && <div className="muted" style={{ marginTop: 4, whiteSpace: "pre-wrap" }}>{String(s.notes)}</div>}
+            {s.terms && <div className="muted" style={{ marginTop: 4, whiteSpace: "pre-wrap" }}>{String(s.terms)}</div>}
+          </div>
+        )}
 
         {(biz.bank_account_name || biz.bank_account_number || biz.bank_ifsc || biz.bank_name || biz.bank_branch || biz.bank_upi) && (
           <div style={{ marginTop: 12 }}>

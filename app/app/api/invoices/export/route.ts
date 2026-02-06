@@ -64,7 +64,10 @@ export async function GET(req: Request) {
       s.subtotal,
       s.tax_total,
       s.total,
-      (s.meta->>'amount_paid')::numeric AS amount_paid,
+      COALESCE(s.amount_paid, (s.meta->>'amount_paid')::numeric, 0) AS amount_paid,
+      COALESCE(s.pending_amount, GREATEST(s.total - COALESCE(s.amount_paid, (s.meta->>'amount_paid')::numeric, 0), 0)) AS pending_amount,
+      COALESCE(NULLIF(s.payment_status,''), (s.meta->>'payment_status')) AS payment_status,
+      COALESCE(NULLIF(s.payment_method,''), (s.meta->>'payment_method')) AS payment_method,
       (s.meta->>'notes') AS notes
     FROM sales s
     LEFT JOIN customers c ON c.id = s.customer_id
@@ -85,6 +88,9 @@ export async function GET(req: Request) {
     "tax_total",
     "total",
     "amount_paid",
+    "pending_amount",
+    "payment_status",
+    "payment_method",
     "notes",
   ].join(","));
 
@@ -99,6 +105,9 @@ export async function GET(req: Request) {
       csvEscape(r.tax_total ?? ""),
       csvEscape(r.total ?? ""),
       csvEscape(r.amount_paid ?? ""),
+      csvEscape(r.pending_amount ?? ""),
+      csvEscape(r.payment_status ?? ""),
+      csvEscape(r.payment_method ?? ""),
       csvEscape(r.notes ?? ""),
     ].join(","));
   }

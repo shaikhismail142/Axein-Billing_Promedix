@@ -10,6 +10,7 @@ function pageTitle(pathname: string | null) {
     { prefix: '/invoices', label: 'Invoices' },
     { prefix: '/inventory', label: 'Inventory' },
     { prefix: '/reports', label: 'Reports' },
+    { prefix: '/accounting', label: 'Accounting' },
     { prefix: '/settings', label: 'Settings' },
     { prefix: '/billing', label: 'Quick Billing' },
   ];
