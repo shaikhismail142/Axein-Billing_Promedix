@@ -28,25 +28,29 @@ export default async function TaxPrintPage({
   const statusColor = summary.status === "Payable" ? "#b45309" : "#065f46";
 
   return (
-    <div>
+    <div className="tax-print">
       <style>{`
           @page { size: A4; margin: 12mm; }
           @media print {
             .noprint { display: none !important; }
+            #site-chrome, header, footer, .topbar, .sidebar { display: none !important; }
+            body { background: #fff !important; }
           }
-          html, body { background: #fff; }
-          body { font-family: "Manrope", ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial; margin: 24px; color: #0b1220; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-          h1,h2,h3 { margin: 0; }
-          .muted { color: #64748b; }
-          .header { border-radius: 14px; overflow: hidden; border: 1px solid #e5e7eb; }
-          .header-top { background: #1f4a8f; color: #fff; padding: 16px 18px; display:flex; justify-content:space-between; gap:12px; }
-          .title { font-size: 22px; font-weight: 700; letter-spacing: 0.08em; }
-          .summary { display:grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap: 10px; margin-top: 12px; }
-          .card { border: 1px solid #e5e7eb; border-radius: 12px; padding: 10px; }
-          table { width: 100%; border-collapse: collapse; margin-top: 12px; }
-          th, td { border-top: 1px solid #e5e7eb; padding: 6px 8px; text-align: left; }
-          th { font-size: 12px; text-transform: uppercase; letter-spacing: 0.03em; color: #475569; }
-          .right { text-align: right; }
+          .tax-print { font-family: "Manrope", ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial; color: #0b1220; background: #fff; padding: 24px; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+          .tax-print h1,.tax-print h2,.tax-print h3 { margin: 0; }
+          .tax-print .muted { color: #475569; }
+          .tax-print .header { border-radius: 14px; overflow: hidden; border: 1px solid #e2e8f0; background: #f8fafc; }
+          .tax-print .header-top { background: #e8f1ff; color: #0b1220; padding: 16px 18px; display:flex; justify-content:space-between; gap:12px; }
+          .tax-print .title { font-size: 22px; font-weight: 700; letter-spacing: 0.08em; color: #0b1220; }
+          .tax-print .summary { display:grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap: 10px; margin-top: 12px; }
+          .tax-print .card { border: 1px solid #e2e8f0; border-radius: 12px; padding: 10px; background: #f8fafc; color: #0b1220; box-shadow: none; }
+          .tax-print .metric { background: #f8fafc; }
+          .tax-print .metric .value { font-size: 18px; font-weight: 700; color: #0b1220; }
+          .tax-print .metric-payable .value { color: #b45309; }
+          .tax-print table { width: 100%; border-collapse: collapse; margin-top: 12px; color: #0b1220; }
+          .tax-print th, .tax-print td { border-top: 1px solid #e2e8f0; padding: 6px 8px; text-align: left; }
+          .tax-print th { font-size: 12px; text-transform: uppercase; letter-spacing: 0.03em; color: #334155; }
+          .tax-print .right { text-align: right; }
         `}</style>
         <div className="noprint" style={{ marginBottom: 12 }}>
           <button id="printBtn" style={{ border: "1px solid #e5e7eb", padding: "6px 10px", borderRadius: 6 }}>Print</button>
@@ -80,17 +84,17 @@ export default async function TaxPrintPage({
         </div>
 
         <div className="summary">
-          <div className="card">
+          <div className="card metric">
             <div className="muted">Output GST (Sales)</div>
-            <div style={{ fontSize: 18, fontWeight: 700 }}>{inr(summary.output_tax)}</div>
+            <div className="value">{inr(summary.output_tax)}</div>
           </div>
-          <div className="card">
+          <div className="card metric">
             <div className="muted">Input GST (Purchases / ITC)</div>
-            <div style={{ fontSize: 18, fontWeight: 700 }}>{inr(summary.input_tax)}</div>
+            <div className="value">{inr(summary.input_tax)}</div>
           </div>
-          <div className="card">
+          <div className="card metric metric-payable">
             <div className="muted">{statusLabel}</div>
-            <div style={{ fontSize: 18, fontWeight: 800, color: statusColor }}>{inr(Math.abs(summary.net_tax))}</div>
+            <div className="value" style={{ color: statusColor }}>{inr(Math.abs(summary.net_tax))}</div>
           </div>
         </div>
 
