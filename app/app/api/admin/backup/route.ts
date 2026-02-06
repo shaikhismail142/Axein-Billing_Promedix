@@ -209,7 +209,13 @@ export async function POST(req: NextRequest) {
     await archive.finalize();
     await done;
 
-    const zipBytes = Buffer.concat(chunks);
+    const total = chunks.reduce((s, c) => s + c.length, 0);
+    const zipBytes = new Uint8Array(total);
+    let off = 0;
+    for (const c of chunks) {
+      zipBytes.set(c, off);
+      off += c.length;
+    }
     const filename = `axein-backup-${istStamp()}.zip`;
 
     return new Response(zipBytes, {
