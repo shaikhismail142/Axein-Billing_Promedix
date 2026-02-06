@@ -9,8 +9,10 @@ export async function GET(req: NextRequest) {
     const url = new URL(req.url);
     const from = url.searchParams.get("from");
     const to = url.searchParams.get("to");
+    const group = url.searchParams.get("group") === "quarter" ? "quarter" : "month";
+    const includeDraft = url.searchParams.get("includeDraft") === "1";
 
-    const data = await getTaxReport(from, to);
+    const data = await getTaxReport(from, to, { group, includeDraft });
 
     return NextResponse.json({
       ok: true,

@@ -22,7 +22,7 @@ type DeadStockItem = { id: number; name: string; stock_qty: number; low_stock_th
 type MoversItem = { name: string; qty: number; revenue: number };
 type Retention = { new_count: number; repeat_count: number };
 type LowTrendPoint = { date: string; low_count: number };
-type TaxMonth = { month: string; label: string; input_tax: number; output_tax: number; net_tax: number };
+type TaxMonth = { period: string; label: string; input_tax: number; output_tax: number; net_tax: number };
 type TaxReport = {
   summary: { input_tax: number; output_tax: number; net_tax: number; status: "Payable" | "Credit" };
   months: TaxMonth[];
@@ -54,6 +54,8 @@ export default function ReportsPage() {
   const [retention, setRetention] = useState<Retention | null>(null);
   const [lowTrend, setLowTrend] = useState<LowTrendPoint[]>([]);
   const [taxReport, setTaxReport] = useState<TaxReport | null>(null);
+  const [taxGroup, setTaxGroup] = useState<"month" | "quarter">("month");
+  const [includeDraftPurchases, setIncludeDraftPurchases] = useState<boolean>(false);
   const [busy, setBusy] = useState(false);
 
   // Keep deps simple & stable for theme recalculation
@@ -71,12 +73,13 @@ export default function ReportsPage() {
     setBusy(true);
     try {
       const qs = `from=${range.from}&to=${range.to}`;
+      const taxQs = `${qs}&group=${taxGroup}&includeDraft=${includeDraftPurchases ? 1 : 0}`;
       const [ds, mv, re, lt, tx] = await Promise.all([
         fetch(`/api/reports/dead-stock?days=${deadDays}&page=${deadPage}&perPage=${deadPerPage}`).then(r => r.json()),
         fetch(`/api/reports/movers?${qs}`).then(r => r.json()),
         fetch(`/api/reports/customers/retention?${qs}`).then(r => r.json()),
         fetch(`/api/reports/low-stock-trends?${qs}`).then(r => r.json()),
-        fetch(`/api/reports/tax?${qs}`).then(r => r.json()),
+        fetch(`/api/reports/tax?${taxQs}`).then(r => r.json()),
       ]);
       setDeadStock(Array.isArray(ds?.items) ? ds.items : []);
       setDeadTotalPages(Number(ds?.totalPages || 1));
@@ -105,7 +108,7 @@ export default function ReportsPage() {
     } finally {
       setBusy(false);
     }
-  }, [range.from, range.to, deadDays, deadPage, deadPerPage]);
+  }, [range.from, range.to, deadDays, deadPage, deadPerPage, taxGroup, includeDraftPurchases]);
 
   useEffect(() => {
     setDeadPage(1);
@@ -208,12 +211,43 @@ export default function ReportsPage() {
                 Output GST = tax collected on sales • Input GST = tax paid on purchases (ITC)
               </div>
             </div>
-            <button
-              className="btn"
-              onClick={() => window.open(`/reports/tax/print?from=${range.from}&to=${range.to}`, '_blank')}
-            >
-              Print Tax Report
-            </button>
+            <div className="flex flex-wrap items-center gap-2">
+              <label className="text-xs muted">Grouping</label>
+              <select
+                className="input"
+                value={taxGroup}
+                onChange={(e) => setTaxGroup(e.target.value as "month" | "quarter")}
+              >
+                <option value="month">Monthly</option>
+                <option value="quarter">Quarterly</option>
+              </select>
+              <label className="text-xs muted" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                <input
+                  type="checkbox"
+                  checked={includeDraftPurchases}
+                  onChange={(e) => setIncludeDraftPurchases(e.target.checked)}
+                />
+                Include draft purchases
+              </label>
+              <button
+                className="btn"
+                onClick={() => window.open(`/reports/tax/print?from=${range.from}&to=${range.to}&group=${taxGroup}&includeDraft=${includeDraftPurchases ? 1 : 0}`, '_blank')}
+              >
+                Print Tax Report
+              </button>
+              <button
+                className="btn"
+                onClick={() => window.open(`/api/reports/tax/export?format=csv&from=${range.from}&to=${range.to}&group=${taxGroup}&includeDraft=${includeDraftPurchases ? 1 : 0}`, '_blank')}
+              >
+                Export CSV
+              </button>
+              <button
+                className="btn"
+                onClick={() => window.open(`/api/reports/tax/export?format=excel&from=${range.from}&to=${range.to}&group=${taxGroup}&includeDraft=${includeDraftPurchases ? 1 : 0}`, '_blank')}
+              >
+                Export Excel
+              </button>
+            </div>
           </div>
           <div style={{ display:'grid', gridTemplateColumns:'repeat(3, minmax(0,1fr))', gap:12, marginTop:12 }}>
             <div className="card" style={{ padding:10 }}>
@@ -228,6 +262,9 @@ export default function ReportsPage() {
               <div className="muted">{taxStatusLabel}</div>
               <b style={{ fontSize:18, color: taxStatusColor }}>{inr(Math.abs(taxSummary?.net_tax || 0))}</b>
             </div>
+          </div>
+          <div className="muted text-xs" style={{ marginTop: 8 }}>
+            Draft purchases are {includeDraftPurchases ? "included" : "excluded"} in Input GST.
           </div>
         </div>
 

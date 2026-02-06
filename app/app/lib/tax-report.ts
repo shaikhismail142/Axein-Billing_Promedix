@@ -1,8 +1,8 @@
 import { pool } from "@/lib/db";
 
 export type TaxMonth = {
-  month: string; // YYYY-MM
-  label: string; // e.g., Feb 2026
+  period: string; // YYYY-MM or YYYY-Qn
+  label: string; // e.g., Feb 2026 or Q1 2026
   input_tax: number;
   output_tax: number;
   net_tax: number;
@@ -33,13 +33,27 @@ export function normalizeRange(from?: string | null, to?: string | null): { from
   return { from: f, to: t };
 }
 
-export async function getTaxReport(fromRaw?: string | null, toRaw?: string | null) {
+export async function getTaxReport(
+  fromRaw?: string | null,
+  toRaw?: string | null,
+  opts?: { group?: "month" | "quarter"; includeDraft?: boolean }
+) {
   const { from, to } = normalizeRange(fromRaw, toRaw);
   const fromDate = toDate(from, false);
   const toDateVal = toDate(to, true);
+  const group: "month" | "quarter" = opts?.group === "quarter" ? "quarter" : "month";
+  const includeDraft = opts?.includeDraft === true;
+
+  const salesGroupExpr = group === "quarter"
+    ? "date_trunc('quarter', COALESCE(invoice_date, created_at))::date"
+    : "date_trunc('month', COALESCE(invoice_date, created_at))::date";
+
+  const purchaseGroupExpr = group === "quarter"
+    ? "date_trunc('quarter', COALESCE(bill_date, created_at))::date"
+    : "date_trunc('month', COALESCE(bill_date, created_at))::date";
 
   const salesRows = await pool.query(
-    `SELECT date_trunc('month', COALESCE(invoice_date, created_at))::date AS month,
+    `SELECT ${salesGroupExpr} AS period,
             SUM((CASE WHEN COALESCE((meta->>'is_return')::boolean, false) THEN -1 ELSE 1 END)
                 * COALESCE(tax_total, 0)) AS output_tax
        FROM sales
@@ -51,37 +65,47 @@ export async function getTaxReport(fromRaw?: string | null, toRaw?: string | nul
   );
 
   const purchaseRows = await pool.query(
-    `SELECT date_trunc('month', COALESCE(bill_date, created_at))::date AS month,
-            SUM(CASE WHEN status='draft' THEN 0 ELSE COALESCE(tax_total, 0) END) AS input_tax
+    `SELECT ${purchaseGroupExpr} AS period,
+            SUM(CASE WHEN status='draft' AND $3::boolean = false THEN 0 ELSE COALESCE(tax_total, 0) END) AS input_tax
        FROM purchases
       WHERE COALESCE(bill_date, created_at) >= $1
         AND COALESCE(bill_date, created_at) <= $2
       GROUP BY 1
       ORDER BY 1`,
-    [fromDate, toDateVal]
+    [fromDate, toDateVal, includeDraft]
   );
 
   const monthMap = new Map<string, TaxMonth>();
-  const toLabel = (d: Date) => d.toLocaleDateString("en-IN", { month: "short", year: "numeric" });
+  const toLabel = (d: Date) => {
+    if (group === "quarter") {
+      const q = Math.floor(d.getUTCMonth() / 3) + 1;
+      return `Q${q} ${d.getUTCFullYear()}`;
+    }
+    return d.toLocaleDateString("en-IN", { month: "short", year: "numeric" });
+  };
 
   for (const r of salesRows.rows || []) {
-    const d = new Date(r.month);
-    const key = d.toISOString().slice(0, 7);
-    const prev = monthMap.get(key) || { month: key, label: toLabel(d), input_tax: 0, output_tax: 0, net_tax: 0 };
+    const d = new Date(r.period);
+    const key = group === "quarter"
+      ? `${d.getUTCFullYear()}-Q${Math.floor(d.getUTCMonth() / 3) + 1}`
+      : d.toISOString().slice(0, 7);
+    const prev = monthMap.get(key) || { period: key, label: toLabel(d), input_tax: 0, output_tax: 0, net_tax: 0 };
     prev.output_tax = Number(r.output_tax || 0);
     monthMap.set(key, prev);
   }
 
   for (const r of purchaseRows.rows || []) {
-    const d = new Date(r.month);
-    const key = d.toISOString().slice(0, 7);
-    const prev = monthMap.get(key) || { month: key, label: toLabel(d), input_tax: 0, output_tax: 0, net_tax: 0 };
+    const d = new Date(r.period);
+    const key = group === "quarter"
+      ? `${d.getUTCFullYear()}-Q${Math.floor(d.getUTCMonth() / 3) + 1}`
+      : d.toISOString().slice(0, 7);
+    const prev = monthMap.get(key) || { period: key, label: toLabel(d), input_tax: 0, output_tax: 0, net_tax: 0 };
     prev.input_tax = Number(r.input_tax || 0);
     monthMap.set(key, prev);
   }
 
   const months = Array.from(monthMap.values())
-    .sort((a, b) => a.month.localeCompare(b.month))
+    .sort((a, b) => a.period.localeCompare(b.period))
     .map((m) => ({ ...m, net_tax: Number(m.output_tax || 0) - Number(m.input_tax || 0) }));
 
   const outputTotal = months.reduce((s, m) => s + Number(m.output_tax || 0), 0);
@@ -95,5 +119,5 @@ export async function getTaxReport(fromRaw?: string | null, toRaw?: string | nul
     status: netTotal >= 0 ? "Payable" : "Credit",
   };
 
-  return { from, to, summary, months };
+  return { from, to, summary, months, group, includeDraft };
 }

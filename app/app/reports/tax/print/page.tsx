@@ -9,8 +9,17 @@ function inr(n: number) {
   return `INR (Rs/-) ${v.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
 
-export default async function TaxPrintPage({ searchParams }: { searchParams: { from?: string; to?: string } }) {
-  const { from, to, summary, months } = await getTaxReport(searchParams?.from, searchParams?.to);
+export default async function TaxPrintPage({
+  searchParams,
+}: {
+  searchParams: { from?: string; to?: string; group?: string; includeDraft?: string };
+}) {
+  const group = searchParams?.group === "quarter" ? "quarter" : "month";
+  const includeDraft = searchParams?.includeDraft === "1";
+  const { from, to, summary, months } = await getTaxReport(searchParams?.from, searchParams?.to, {
+    group,
+    includeDraft,
+  });
 
   const bizRs = await pool.query(`SELECT value_json FROM settings WHERE key='business' LIMIT 1`);
   const biz = bizRs.rows?.[0]?.value_json || {};
@@ -57,6 +66,8 @@ export default async function TaxPrintPage({ searchParams }: { searchParams: { f
             </div>
             <div style={{ textAlign: "right", fontSize: 12 }}>
               <div><b>Period:</b> {from} to {to}</div>
+              <div><b>Grouping:</b> {group === "quarter" ? "Quarterly" : "Monthly"}</div>
+              <div><b>Draft Purchases:</b> {includeDraft ? "Included" : "Excluded"}</div>
               <div><b>Generated:</b> {new Date().toLocaleString("en-IN")}</div>
             </div>
           </div>
@@ -79,12 +90,13 @@ export default async function TaxPrintPage({ searchParams }: { searchParams: { f
 
         <div className="muted" style={{ marginTop: 8 }}>
           Output GST = tax collected on invoices. Input GST = tax paid on purchases (eligible ITC). Net = Output − Input.
+          Draft purchases are {includeDraft ? "included" : "excluded"}.
         </div>
 
         <table>
           <thead>
             <tr>
-              <th>Month</th>
+              <th>Period</th>
               <th className="right">Output GST</th>
               <th className="right">Input GST</th>
               <th className="right">Net</th>
