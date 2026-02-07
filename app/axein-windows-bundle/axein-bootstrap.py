@@ -32,6 +32,7 @@ import urllib.error
 import calendar
 import random
 import string
+import hashlib
 from datetime import datetime
 
 # ---------- Defaults ----------
@@ -984,6 +985,37 @@ def smoke_tests(app_port: int) -> bool:
         ok_count += 1
     return ok_count >= 1
 
+# ---------- Self-update helpers ----------
+
+def file_sha256(p: Path) -> str:
+    h = hashlib.sha256()
+    with p.open("rb") as f:
+        for chunk in iter(lambda: f.read(8192), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+def maybe_reexec_with_repo_script(app_dir: Path, allow_reexec: bool = True):
+    if not allow_reexec:
+        return
+    try:
+        current = Path(__file__).resolve()
+        repo_script = (app_dir / "axein-windows-bundle" / "axein-bootstrap.py").resolve()
+        if not repo_script.exists():
+            return
+        if current == repo_script:
+            return
+        if file_sha256(current) == file_sha256(repo_script):
+            return
+        resp = input("A newer bootstrap was found in the repo. Re-run it now? [Y/n]: ").strip().lower()
+        if resp in ("", "y", "yes"):
+            args = [a for a in sys.argv[1:] if a != "--no-reexec"]
+            cmd = [sys.executable, os.fspath(repo_script)] + args + ["--no-reexec"]
+            info("Re-launching updated bootstrap…")
+            run(cmd, check=False)
+            sys.exit(0)
+    except Exception as e:
+        warn(f"Self-update check failed: {e}")
+
 # ---------- License helpers ----------
 
 def rand_group(n=4) -> str:
@@ -1174,6 +1206,7 @@ def main():
     ap.add_argument("--no-minio", action="store_true", help="Skip MinIO service & seeding.")
     ap.add_argument("--web-image", default=WEB_IMAGE_DEFAULT, help="Prebuilt web image (GHCR). Empty = build from source.")
     ap.add_argument("--build-from-source", action="store_true", help="Force build from source (ignore --web-image).")
+    ap.add_argument("--no-reexec", action="store_true", help="Disable self-update/reexec from repo.")
     ap.add_argument("--ghcr-username", default="", help="GHCR username for docker login")
     ap.add_argument("--ghcr-token", default="", help="GitHub PAT with read:packages for GHCR tag listing")
     ap.add_argument("--seed-activation", action="store_true", help="Seed a baseline 'activation' settings row if missing.")
@@ -1272,6 +1305,9 @@ def main():
         run(["git","clone","--branch",args.branch,"--single-branch",repo_url,os.fspath(app_dir)])
     ok("Source code ready.")
 
+    # If running from a copied script, re-exec from repo for latest fixes
+    maybe_reexec_with_repo_script(app_dir, allow_reexec=(not args.no_reexec))
+
     # Discover LICENSE_PUBLIC_KEY automatically
     discovered_key = load_license_pubkey(app_dir, args.license_public_key.strip() or None)
     if discovered_key:
@@ -1310,6 +1346,24 @@ def main():
     write_init_sql(init_dir, args.db_user, args.db_pass, args.db_name)
 
     # Pull / Up
+    # Pre-pull web image to catch auth/tag errors early
+    if picked_image:
+        info(f"Pulling web image: {picked_image}")
+        web_rc = run(["docker","pull", picked_image], check=False)
+        if web_rc != 0:
+            warn("Web image pull failed.")
+            fallback = input("Switch to build-from-source instead? [Y/n]: ").strip().lower()
+            if fallback in ("", "y", "yes"):
+                picked_image = None
+                write_compose(dest=compose_file, root_dir=root_dir, app_dir=app_dir, app_port=args.app_port, tz=args.tz,
+                              db_user=args.db_user, db_pass=args.db_pass, db_name=args.db_name,
+                              pg_superuser=args.pg_superuser, pg_superpwd=args.pg_superpwd,
+                              license_pubkey=discovered_key,
+                              enable_redis=(not args.no_redis),
+                              enable_mailpit=(not args.no_mailpit),
+                              enable_minio=(not args.no_minio), web_image=None,
+                              host_os=host_os, host_arch=host_arch)
+
     info("Pulling container images…")
     retry(lambda: run(["docker","compose","-f",os.fspath(compose_file),"pull"], check=False), attempts=3, delay=5, what="compose pull")
 
