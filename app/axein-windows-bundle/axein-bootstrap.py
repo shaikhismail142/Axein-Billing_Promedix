@@ -29,6 +29,9 @@ import re
 import socket
 import urllib.request
 import urllib.error
+import calendar
+import random
+import string
 from datetime import datetime
 
 # ---------- Defaults ----------
@@ -40,8 +43,8 @@ PG_SUPERPWD_DEFAULT  = "postgrespass"
 TZ_DEFAULT           = "Asia/Kolkata"
 REPO_DEFAULT         = "https://github.com/shaikhismail142/Axein-Billing_Promedix.git"
 BRANCH_DEFAULT       = "codex/healthcare-customization"
-# Empty => build from source (recommended for Promedix/local installs)
-WEB_IMAGE_DEFAULT    = ""
+# Image install (recommended for Windows)
+WEB_IMAGE_DEFAULT    = "ghcr.io/shaikhismail142/axein-billing:latest"
 GHCR_OWNER_DEFAULT   = "shaikhismail142"
 GHCR_NAME_DEFAULT    = "axein-billing"
 
@@ -430,6 +433,24 @@ def ensure_products_meta(compose_file: Path, db_name: str, db_user: str):
     ], check=False)
 
 
+def ensure_sale_items_meta(compose_file: Path, db_name: str, db_user: str):
+    """Ensure sale_items.meta JSONB exists (idempotent)."""
+    run([
+        "docker","compose","-f",os.fspath(compose_file),"exec","-T","db",
+        "psql","-U",db_user,"-d",db_name,"-v","ON_ERROR_STOP=1","-c",
+        "ALTER TABLE sale_items ADD COLUMN IF NOT EXISTS meta JSONB NOT NULL DEFAULT '{}'::jsonb;"
+    ], check=False)
+
+
+def ensure_sales_meta(compose_file: Path, db_name: str, db_user: str):
+    """Ensure sales.meta JSONB exists (idempotent)."""
+    run([
+        "docker","compose","-f",os.fspath(compose_file),"exec","-T","db",
+        "psql","-U",db_user,"-d",db_name,"-v","ON_ERROR_STOP=1","-c",
+        "ALTER TABLE sales ADD COLUMN IF NOT EXISTS meta JSONB NOT NULL DEFAULT '{}'::jsonb;"
+    ], check=False)
+
+
 def tables_missing(compose_file: Path, db_name: str, db_user: str, expected: list[str] | None = None) -> list[str]:
     q = "SELECT tablename FROM pg_tables WHERE schemaname='public';"
     out = run_out(["docker","compose","-f",os.fspath(compose_file),"exec","-T","db","psql","-U",db_user,"-d",db_name,"-Atqc",q], check=False)
@@ -641,6 +662,34 @@ def install_git(target: str):
     else:
         warn("Git installation may have failed. Proceeding will likely fail later.")
 
+def install_node(target: str):
+    if shutil.which("node"):
+        return
+    info("Node.js not found — attempting installation.")
+    if target == "Windows":
+        if not shutil.which("winget"):
+            warn("winget not found. Install Node.js manually from https://nodejs.org/ and re-run.")
+            return
+        run(["winget","install","-e","--id","OpenJS.NodeJS.LTS","--source","winget","--accept-package-agreements","--accept-source-agreements"], check=False)
+    else:
+        sysname = platform.system()
+        if sysname == "Darwin":
+            if ensure_brew():
+                run(["brew","install","node"], check=False)
+        else:
+            distro = linux_distro()
+            if distro == "debian":
+                run(["bash","-lc","sudo apt-get update"], check=False)
+                run(["bash","-lc","sudo apt-get install -y nodejs npm"], check=False)
+            elif distro in ("fedora","rhel"):
+                run(["bash","-lc","sudo dnf install -y nodejs npm || sudo yum install -y nodejs npm"], check=False)
+            else:
+                warn("Unknown Linux distro. Please install Node.js using your package manager.")
+    if shutil.which("node"):
+        ok("Node.js installed.")
+    else:
+        warn("Node.js installation may have failed. Proceeding will likely fail later.")
+
 def install_docker(target: str):
     if shutil.which("docker"):
         return
@@ -695,6 +744,8 @@ def wait_for_docker_daemon(timeout=180):
 def preinstall_and_preflight(args, target: str, root_dir: Path):
     install_git(target)
     install_docker(target)
+    # Node is used for license signing (tools/license-keygen/sign-license.js)
+    install_node(target)
 
     if platform.system() == "Darwin" and shutil.which("open"):
         run(["open","-g","-a","Docker"], check=False)
@@ -861,6 +912,171 @@ def smoke_tests(app_port: int) -> bool:
         ok_count += 1
     return ok_count >= 1
 
+# ---------- License helpers ----------
+
+def rand_group(n=4) -> str:
+    alphabet = string.ascii_uppercase + string.digits
+    return "".join(random.choice(alphabet) for _ in range(n))
+
+def generate_license_key() -> str:
+    return f"AXEIN-{rand_group()}-{rand_group()}-{rand_group()}"
+
+def parse_date_yyyy_mm_dd(s: str) -> datetime.date:
+    return datetime.strptime(s, "%Y-%m-%d").date()
+
+def add_months(d, months: int):
+    y = d.year + (d.month - 1 + months) // 12
+    m = (d.month - 1 + months) % 12 + 1
+    day = min(d.day, calendar.monthrange(y, m)[1])
+    return datetime(y, m, day).date()
+
+def compute_expiry(start_date, plan: str):
+    plan = plan.lower()
+    if plan == "monthly":
+        return add_months(start_date, 1)
+    if plan == "quarterly":
+        return add_months(start_date, 3)
+    return add_months(start_date, 12)  # yearly default
+
+def prompt_license_details():
+    print("\n--- License Setup ---")
+    company = input("Company name (required): ").strip()
+    while not company:
+        company = input("  Please enter company name: ").strip()
+
+    email = input("Company email (required): ").strip()
+    while not email or not re.match(r"^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$", email):
+        email = input("  Please enter a valid email: ").strip()
+
+    plan = (input("Plan [Monthly/Quarterly/Yearly] (default: Yearly): ").strip() or "Yearly").title()
+    if plan not in ("Monthly", "Quarterly", "Yearly"):
+        warn("Invalid plan. Using Yearly.")
+        plan = "Yearly"
+
+    today_str = datetime.now().strftime("%Y-%m-%d")
+    start_str = input(f"Start date (YYYY-MM-DD) (default: {today_str}): ").strip() or today_str
+    while True:
+        try:
+            start_date = parse_date_yyyy_mm_dd(start_str)
+            break
+        except Exception:
+            start_str = input("  Please use YYYY-MM-DD: ").strip() or today_str
+
+    computed_end = compute_expiry(start_date, plan.lower())
+    end_str = input(f"End date (YYYY-MM-DD) (default: {computed_end}): ").strip() or str(computed_end)
+    while True:
+        try:
+            end_date = parse_date_yyyy_mm_dd(end_str)
+            break
+        except Exception:
+            end_str = input("  Please use YYYY-MM-DD: ").strip() or str(computed_end)
+
+    phone = input("Phone (optional): ").strip()
+    gstin = input("GSTIN (optional): ").strip()
+    state_code = input("State code (optional): ").strip()
+
+    return {
+        "company": company,
+        "email": email,
+        "plan": plan,
+        "start_date": start_date,
+        "end_date": end_date,
+        "phone": phone,
+        "gstin": gstin,
+        "state_code": state_code,
+    }
+
+def sign_license_with_node(app_dir: Path, license_key: str, email: str, expires_iso: str) -> dict | None:
+    if not shutil.which("node"):
+        warn("Node.js not found; cannot generate license.")
+        return None
+    key_path = app_dir / "tools" / "license-keygen" / "ed25519-private.pem"
+    sign_script = app_dir / "tools" / "license-keygen" / "sign-license.js"
+    if not key_path.exists() or not sign_script.exists():
+        warn("License signing files missing. Expected tools/license-keygen/ed25519-private.pem and sign-license.js")
+        return None
+
+    cmd = [
+        "node",
+        os.fspath(sign_script),
+        "--key", os.fspath(key_path),
+        "--license", license_key,
+        "--email", email,
+        "--expires", expires_iso,
+    ]
+    out = run_out(cmd, check=False).strip()
+    try:
+        payload = json.loads(out)
+        return payload
+    except Exception:
+        warn("License signing failed. Output was not JSON.")
+        return None
+
+def save_license_txt(payload: dict, downloads_dir: Path) -> Path | None:
+    try:
+        downloads_dir.mkdir(parents=True, exist_ok=True)
+        key = str(payload.get("license_key", "license"))
+        out_path = downloads_dir / f"{key}.txt"
+        out_path.write_text(
+            "\n".join([
+                f"license_key={payload.get('license_key','')}",
+                f"email={payload.get('email','')}",
+                f"expires_at={payload.get('expires_at','')}",
+                f"signature={payload.get('signature','')}",
+            ]) + "\n",
+            encoding="utf-8"
+        )
+        return out_path
+    except Exception as e:
+        warn(f"Could not write license file to Downloads: {e}")
+        return None
+
+def apply_license(app_port: int, payload: dict) -> bool:
+    try:
+        body = json.dumps(payload).encode("utf-8")
+        req = urllib.request.Request(
+            f"http://127.0.0.1:{app_port}/api/license/verify-key",
+            data=body,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            if data.get("ok"):
+                ok("License applied successfully.")
+                return True
+            warn(f"License apply failed: {data}")
+    except Exception as e:
+        warn(f"License apply request failed: {e}")
+    return False
+
+def apply_business_settings(app_port: int, company: str, email: str, phone: str, gstin: str, state_code: str):
+    value_json = { "name": company }
+    if email:
+        value_json["email"] = email
+    if phone:
+        value_json["phone"] = phone
+    if gstin:
+        value_json["gstin"] = gstin
+    if state_code:
+        value_json["state_code"] = state_code
+    payload = {"key": "business", "value_json": value_json}
+    try:
+        body = json.dumps(payload).encode("utf-8")
+        req = urllib.request.Request(
+            f"http://127.0.0.1:{app_port}/api/settings",
+            data=body,
+            headers={"Content-Type": "application/json"},
+            method="PATCH",
+        )
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            if resp.status == 200:
+                ok("Business settings updated from installer.")
+                return True
+    except Exception as e:
+        warn(f"Business settings update failed: {e}")
+    return False
+
 # ---------- Main ----------
 
 def main():
@@ -884,6 +1100,7 @@ def main():
     ap.add_argument("--no-mailpit", action="store_true", help="Skip Mailpit (SMTP dev inbox) service.")
     ap.add_argument("--no-minio", action="store_true", help="Skip MinIO service & seeding.")
     ap.add_argument("--web-image", default=WEB_IMAGE_DEFAULT, help="Prebuilt web image (GHCR). Empty = build from source.")
+    ap.add_argument("--build-from-source", action="store_true", help="Force build from source (ignore --web-image).")
     ap.add_argument("--ghcr-username", default="", help="GHCR username for docker login")
     ap.add_argument("--ghcr-token", default="", help="GitHub PAT with read:packages for GHCR tag listing")
     ap.add_argument("--seed-activation", action="store_true", help="Seed a baseline 'activation' settings row if missing.")
@@ -949,14 +1166,22 @@ def main():
             run(["powershell","-NoProfile","-Command", f"$p='{args.ghcr_token}'; $p | docker login ghcr.io -u {args.ghcr_username} --password-stdin"], check=False)
         ok("GHCR login attempted.")
 
-    # Web image selection: if --web-image is empty, we build from source (recommended).
+    # Web image selection: default to image (recommended for Windows)
     picked_image: str | None = None
-    if args.web_image and args.web_image.strip():
-        owner, name = GHCR_OWNER_DEFAULT, GHCR_NAME_DEFAULT
-        picked_image = choose_web_image(args.web_image, owner, name, args.ghcr_token.strip())
-        ok(f"Using web image: {picked_image}")
+    if args.build_from_source:
+        ok("Build-from-source requested; skipping web image.")
+        picked_image = None
     else:
-        ok("No --web-image provided; will build web from source (local image).")
+        web_image = (args.web_image or "").strip()
+        if web_image:
+            if args.ghcr_token:
+                owner, name = GHCR_OWNER_DEFAULT, GHCR_NAME_DEFAULT
+                picked_image = choose_web_image(web_image, owner, name, args.ghcr_token.strip())
+            else:
+                picked_image = web_image if ":" in web_image else f"{web_image}:latest"
+            ok(f"Using web image: {picked_image}")
+        else:
+            ok("No --web-image provided; will build web from source (local image).")
 
     # Clone/pull
     if (app_dir / ".git").exists():
@@ -1009,12 +1234,16 @@ def main():
 
     # Ensure JSONB meta exists before migrations (prevents early API writes from failing)
     ensure_products_meta(compose_file, args.db_name, args.db_user)
+    ensure_sales_meta(compose_file, args.db_name, args.db_user)
+    ensure_sale_items_meta(compose_file, args.db_name, args.db_user)
 
     # Auto-migrate if needed
     if not auto_migrate(compose_file, app_dir, args.db_name, args.db_user):
         warn("Attempting a second migration pass after grants…")
         ensure_role_db_after_start(compose_file, args.db_name, args.db_user, args.db_pass, args.pg_superuser)
         ensure_products_meta(compose_file, args.db_name, args.db_user)
+        ensure_sales_meta(compose_file, args.db_name, args.db_user)
+        ensure_sale_items_meta(compose_file, args.db_name, args.db_user)
         if not auto_migrate(compose_file, app_dir, args.db_name, args.db_user):
             fail("Database migrations failed. Check SQL under app/db/migrations and DB logs.")
 
@@ -1027,6 +1256,47 @@ def main():
     if not wait_for_web_ready(args.app_port, compose_file, timeout_sec=240):
         warn(f"Web did not return 200 on /. Run 'docker compose -f {compose_file} logs -f web' for details.")
     all_ok = smoke_tests(args.app_port)
+
+    # License flow (interactive)
+    try:
+        do_license = input("Generate and apply license now? [Y/n]: ").strip().lower()
+        if do_license in ("", "y", "yes"):
+            details = prompt_license_details()
+            license_key = generate_license_key()
+            expires_iso = f"{details['end_date']}T23:59:59.000Z"
+
+            payload = sign_license_with_node(
+                app_dir=app_dir,
+                license_key=license_key,
+                email=details["email"],
+                expires_iso=expires_iso,
+            )
+            if payload:
+                # Apply license in app
+                apply_license(args.app_port, payload)
+
+                # Update business settings
+                apply_business_settings(
+                    app_port=args.app_port,
+                    company=details["company"],
+                    email=details["email"],
+                    phone=details["phone"],
+                    gstin=details["gstin"],
+                    state_code=details["state_code"],
+                )
+
+                # Save license to Downloads
+                home = Path(os.path.expanduser("~"))
+                downloads = home / "Downloads"
+                saved = save_license_txt(payload, downloads)
+                if saved:
+                    ok(f"License saved to: {saved}")
+                else:
+                    warn("License file not saved. You can copy the payload from console if needed.")
+            else:
+                warn("License generation failed. You can try again later in Settings → License.")
+    except Exception as e:
+        warn(f"License flow skipped due to error: {e}")
 
     # Helper
     ensure_dir(helper_dir)
