@@ -2,15 +2,15 @@
 # -*- coding: utf-8 -*-
 """
 AxEin – Bootstrap (Python)
-v7.4 (fixed)
+v7.5 (promedix)
 - Interactive GHCR tag picker (sorted by last update) when GHCR token provided
 - Align S3 env names: S3_KEY / S3_SECRET
 - MinIO console mapped 9003:9001 & healthcheck; web depends_on service_healthy
 - LICENSE_PUBLIC_KEY discovery: info.json (publicKeyBase64 or publicKey_spki_base64) + .env.template/.env.example
 - Add Mailpit service + depends_on
 - Robust SQL migration apply (detects running db container id instead of assuming name)
-- Expanded EXPECTED_TABLES to include inventory & notifications (uses stock_movements, not stock_ledger)
-- Adds optional seed for near_expiry_days + minimal business_profile
+- Apply incremental migrations even when core schema already exists (202*.sql + 999_app_compat.sql)
+- Seed settings keys used by current app (settings.key='business' and settings.key='inventory')
 - Correct 'platform' placement for both image and build cases
 - NEW: Guard ensure_products_meta() so products.meta JSONB always exists before migrations
 """
@@ -38,23 +38,16 @@ DB_PASS_DEFAULT      = "axeindbpass"
 PG_SUPERUSER_DEFAULT = "postgres"
 PG_SUPERPWD_DEFAULT  = "postgrespass"
 TZ_DEFAULT           = "Asia/Kolkata"
-WEB_IMAGE_DEFAULT    = "ghcr.io/shaikhismail142/axein-billing:latest"
+REPO_DEFAULT         = "https://github.com/shaikhismail142/Axein-Billing_Promedix.git"
+BRANCH_DEFAULT       = "codex/healthcare-customization"
+# Empty => build from source (recommended for Promedix/local installs)
+WEB_IMAGE_DEFAULT    = ""
 GHCR_OWNER_DEFAULT   = "shaikhismail142"
 GHCR_NAME_DEFAULT    = "axein-billing"
 
-# Used as a simple "is schema present?" gate before/after migrations
-EXPECTED_TABLES = [
-    # core
-    "settings", "customers", "products",
-    # sales/quotes
-    "sales", "sale_items", "quotations",
-    # inventory & purchases (canonical table/column names in current app)
-    "suppliers", "purchases", "purchase_items", "product_batches", "stock_movements",
-    # adjustments (present in newer setups; harmless if absent, but helps bootstraps run migrations)
-    "inventory_adjustments", "inventory_adjustment_items",
-    # notifications
-    "notifications",
-]
+# Used as a simple "is schema present?" gate before/after migrations.
+# Keep this minimal so an older DB doesn't force a full re-init.
+CORE_TABLES = ["settings", "customers", "products", "sales", "sale_items"]
 
 # ---------- Simple logging ----------
 info = lambda m: print(f"[axein] {m}")
@@ -179,6 +172,8 @@ def write_compose(dest: Path, root_dir: Path, app_dir: Path, app_port: int, tz: 
                   db_user: str, db_pass: str, db_name: str,
                   pg_superuser: str, pg_superpwd: str,
                   license_pubkey: str | None,
+                  enable_redis: bool,
+                  enable_mailpit: bool,
                   enable_minio: bool,
                   web_image: str | None,
                   host_os: str, host_arch: str):
@@ -211,7 +206,16 @@ def write_compose(dest: Path, root_dir: Path, app_dir: Path, app_port: int, tz: 
     restart: unless-stopped
 """ if enable_minio else ""
 
+    web_dep_redis = "\n      redis:\n        condition: service_started" if enable_redis else ""
     web_dep_minio = "\n      minio:\n        condition: service_healthy" if enable_minio else ""
+    web_dep_mailpit = "\n      mailpit:\n        condition: service_started" if enable_mailpit else ""
+
+    redis_service = """
+  redis:
+    image: redis:7
+    ports: ["6379:6379"]
+    restart: unless-stopped
+""" if enable_redis else ""
 
     if web_image:
         web_block = f"""
@@ -221,10 +225,7 @@ def write_compose(dest: Path, root_dir: Path, app_dir: Path, app_port: int, tz: 
     depends_on:
       db:
         condition: service_healthy
-      redis:
-        condition: service_started{web_dep_minio}
-      mailpit:
-        condition: service_started
+{(web_dep_redis + web_dep_minio + web_dep_mailpit).rstrip()}
     environment:
       NODE_ENV: production
       TZ: {tz}
@@ -236,8 +237,7 @@ def write_compose(dest: Path, root_dir: Path, app_dir: Path, app_port: int, tz: 
       POSTGRES_USER: {db_user}
       POSTGRES_PASSWORD: {db_pass}
       POSTGRES_DB: {db_name}
-      REDIS_HOST: redis
-      REDIS_PORT: "6379"
+{("      REDIS_HOST: redis\n      REDIS_PORT: \"6379\"\n" if enable_redis else "").rstrip()}
       S3_ENDPOINT: {"http://minio:9000" if enable_minio else ""}
       S3_KEY: {"minioadmin" if enable_minio else ""}
       S3_SECRET: {"minioadmin" if enable_minio else ""}
@@ -259,10 +259,7 @@ def write_compose(dest: Path, root_dir: Path, app_dir: Path, app_port: int, tz: 
     depends_on:
       db:
         condition: service_healthy
-      redis:
-        condition: service_started{web_dep_minio}
-      mailpit:
-        condition: service_started
+{(web_dep_redis + web_dep_minio + web_dep_mailpit).rstrip()}
     environment:
       NODE_ENV: production
       TZ: {tz}
@@ -274,8 +271,7 @@ def write_compose(dest: Path, root_dir: Path, app_dir: Path, app_port: int, tz: 
       POSTGRES_USER: {db_user}
       POSTGRES_PASSWORD: {db_pass}
       POSTGRES_DB: {db_name}
-      REDIS_HOST: redis
-      REDIS_PORT: "6379"
+{("      REDIS_HOST: redis\n      REDIS_PORT: \"6379\"\n" if enable_redis else "").rstrip()}
       S3_ENDPOINT: {"http://minio:9000" if enable_minio else ""}
       S3_KEY: {"minioadmin" if enable_minio else ""}
       S3_SECRET: {"minioadmin" if enable_minio else ""}
@@ -292,7 +288,7 @@ def write_compose(dest: Path, root_dir: Path, app_dir: Path, app_port: int, tz: 
     image: axllent/mailpit:latest
     ports: ["8025:8025", "1025:1025"]
     restart: unless-stopped
-"""
+""" if enable_mailpit else ""
 
     compose = f"""name: axein
 services:
@@ -319,11 +315,7 @@ services:
       - type: bind
         source: {p(root_dir / 'init')}
         target: /docker-entrypoint-initdb.d
-  redis:
-    image: redis:7
-    ports: ["6379:6379"]
-    restart: unless-stopped
-{minio_service}{mailpit_block}{web_block}
+{redis_service}{minio_service}{mailpit_block}{web_block}
 """
     dest.write_text(compose, encoding="utf-8")
     ok(f"docker-compose.yml written at {dest}")
@@ -331,7 +323,8 @@ services:
 # ---------- .env generation ----------
 
 def write_env_file(dest: Path, app_port: int, tz: str, db_user: str, db_pass: str, db_name: str,
-                   enable_minio: bool, base_url: str, license_pubkey: str | None):
+                   enable_redis: bool, enable_mailpit: bool, enable_minio: bool,
+                   base_url: str, license_pubkey: str | None):
     lines = [
         f"NODE_ENV=production",
         f"TZ={tz}",
@@ -343,19 +336,25 @@ def write_env_file(dest: Path, app_port: int, tz: str, db_user: str, db_pass: st
         f"POSTGRES_USER={db_user}",
         f"POSTGRES_PASSWORD={db_pass}",
         f"POSTGRES_DB={db_name}",
-        f"REDIS_HOST=redis",
-        f"REDIS_PORT=6379",
         "HOST=0.0.0.0",
         "NEXT_TELEMETRY_DISABLED=1",
-        # SMTP defaults (Mailpit)
-        "SMTP_HOST=mailpit",
-        "SMTP_PORT=1025",
-        "SMTP_SECURE=false",
-        "SMTP_USER=",
-        "SMTP_PASS=",
-        'SMTP_FROM="AxEin Billing <dev@local>"',
-        "SMTP_DRIVER=console",
     ]
+    if enable_redis:
+        lines += [
+            "REDIS_HOST=redis",
+            "REDIS_PORT=6379",
+        ]
+    if enable_mailpit:
+        lines += [
+            # SMTP defaults (Mailpit)
+            "SMTP_HOST=mailpit",
+            "SMTP_PORT=1025",
+            "SMTP_SECURE=false",
+            "SMTP_USER=",
+            "SMTP_PASS=",
+            'SMTP_FROM="AxEin Billing <dev@local>"',
+            "SMTP_DRIVER=console",
+        ]
     if enable_minio:
         lines += [
             "S3_ENDPOINT=http://minio:9000",
@@ -431,21 +430,31 @@ def ensure_products_meta(compose_file: Path, db_name: str, db_user: str):
     ], check=False)
 
 
-def tables_missing(compose_file: Path, db_name: str, db_user: str) -> list[str]:
+def tables_missing(compose_file: Path, db_name: str, db_user: str, expected: list[str] | None = None) -> list[str]:
     q = "SELECT tablename FROM pg_tables WHERE schemaname='public';"
     out = run_out(["docker","compose","-f",os.fspath(compose_file),"exec","-T","db","psql","-U",db_user,"-d",db_name,"-Atqc",q], check=False)
     have = set([t.strip() for t in out.splitlines() if t.strip()])
-    missing = [t for t in EXPECTED_TABLES if t not in have]
+    expected = expected or CORE_TABLES
+    missing = [t for t in expected if t not in have]
     return missing
 
 
-def migration_candidates(app_dir: Path) -> list[Path]:
+def migration_candidates(app_dir: Path, mode: str) -> list[Path]:
     mig_dir = app_dir / "db" / "migrations"
-    candidates = sorted(Path(p) for p in glob(os.path.join(os.fspath(mig_dir), "*.sql")))
-    if candidates:
-        return candidates
-    fallback = mig_dir / "999_app_compat.sql"
-    return [fallback] if fallback.exists() else []
+    all_sql = sorted(Path(p) for p in glob(os.path.join(os.fspath(mig_dir), "*.sql")))
+    if not all_sql:
+        return []
+
+    if mode == "full":
+        return all_sql
+
+    # "incremental": safe-to-run patch migrations for existing DBs
+    out: list[Path] = []
+    for fp in all_sql:
+        nm = fp.name
+        if nm == "999_app_compat.sql" or re.match(r"^202\\d{8}.*\\.sql$", nm) or re.match(r"^202\\d{8}[a-z].*\\.sql$", nm):
+            out.append(fp)
+    return sorted(out, key=lambda p: p.name)
 
 
 def apply_sql_file(compose_file: Path, sql_path: Path, db_name: str, db_user: str) -> bool:
@@ -468,16 +477,19 @@ def apply_sql_file(compose_file: Path, sql_path: Path, db_name: str, db_user: st
 
 
 def auto_migrate(compose_file: Path, app_dir: Path, db_name: str, db_user: str) -> bool:
-    missing = tables_missing(compose_file, db_name, db_user)
-    if not missing:
-        ok("Schema present. No migration needed.")
-        return True
+    missing_core = tables_missing(compose_file, db_name, db_user, expected=CORE_TABLES)
+    mode = "full" if missing_core else "incremental"
 
-    warn(f"Missing tables detected: {', '.join(missing)}")
-    cands = migration_candidates(app_dir)
+    if mode == "full":
+        warn(f"Core tables missing: {', '.join(missing_core)}")
+        info("Applying full migration set (fresh install)…")
+    else:
+        info("Core schema present. Applying incremental migrations (patch/compat)…")
+
+    cands = migration_candidates(app_dir, mode=mode)
     if not cands:
-        fail("No migration SQL found (app/db/migrations/*.sql).")
-        return False
+        ok("No migration SQL files found under app/db/migrations/*.sql. Skipping.")
+        return True
 
     info(f"Applying {len(cands)} migration file(s)…")
     all_ok = True
@@ -488,12 +500,12 @@ def auto_migrate(compose_file: Path, app_dir: Path, db_name: str, db_user: str) 
             warn(f"Migration failed for {fp.name}")
             break
 
-    still_missing = tables_missing(compose_file, db_name, db_user)
-    if still_missing:
-        fail(f"Still missing after migration: {', '.join(still_missing)}")
+    still_missing_core = tables_missing(compose_file, db_name, db_user, expected=CORE_TABLES)
+    if still_missing_core:
+        fail(f"Still missing core tables after migration: {', '.join(still_missing_core)}")
         return False
 
-    ok("Migrations complete and schema verified.")
+    ok("Migrations complete and core schema verified.")
     return all_ok
 
 
@@ -519,28 +531,45 @@ ON CONFLICT (key) DO NOTHING;
 
 
 def seed_settings_defaults(compose_file: Path, db_name: str, db_user: str):
-    # near_expiry_days
-    q = "SELECT 1 FROM settings WHERE key='near_expiry_days' LIMIT 1;"
-    out = run_out(["docker","compose","-f",os.fspath(compose_file),"exec","-T","db",
-                   "psql","-U",db_user,"-d",db_name,"-Atqc",q], check=False).strip()
-    if out != "1":
-        run(["docker","compose","-f",os.fspath(compose_file),"exec","-T","db","psql",
-             "-U",db_user,"-d",db_name,"-v","ON_ERROR_STOP=1",
-             "-c","INSERT INTO settings(key,value_json) VALUES ('near_expiry_days','180') ON CONFLICT (key) DO NOTHING;"], check=False)
-        ok("Seeded near_expiry_days=180")
+    info("Seeding required settings defaults (idempotent)…")
 
-    # business_profile
-    q2 = "SELECT 1 FROM settings WHERE key='business_profile' LIMIT 1;"
-    out2 = run_out(["docker","compose","-f",os.fspath(compose_file),"exec","-T","db",
-                    "psql","-U",db_user,"-d",db_name,"-Atqc",q2], check=False).strip()
-    if out2 != "1":
-        upsert = r"""INSERT INTO settings(key,value_json) VALUES ('business_profile', jsonb_build_object(
-           'company_name','Your Company','address_line1','','address_line2','','city','',
-           'state','','pincode','','phone','','email','','website','','gstin',''
-        )) ON CONFLICT (key) DO NOTHING;"""
-        run(["docker","compose","-f",os.fspath(compose_file),"exec","-T","db","psql",
-             "-U",db_user,"-d",db_name,"-v","ON_ERROR_STOP=1","-c",upsert], check=False)
-        ok("Seeded minimal business_profile")
+    # inventory.near_expiry_days (used by /inventory/expiry + alerts)
+    inv_upsert = r"""
+INSERT INTO settings(key, value_json)
+VALUES ('inventory', jsonb_build_object('near_expiry_days', 180))
+ON CONFLICT (key) DO UPDATE
+SET value_json =
+  CASE
+    WHEN COALESCE(settings.value_json, '{}'::jsonb) ? 'near_expiry_days'
+      THEN COALESCE(settings.value_json, '{}'::jsonb)
+    ELSE COALESCE(settings.value_json, '{}'::jsonb) || jsonb_build_object('near_expiry_days', 180)
+  END;
+"""
+    run(["docker","compose","-f",os.fspath(compose_file),"exec","-T","db","psql",
+         "-U",db_user,"-d",db_name,"-v","ON_ERROR_STOP=1","-c",inv_upsert], check=False)
+
+    # business profile (used by invoice/quotation/tax prints)
+    biz_upsert = r"""
+INSERT INTO settings(key, value_json)
+VALUES ('business', jsonb_build_object(
+  'name','Your Company',
+  'address','',
+  'phone','',
+  'gstin','',
+  'state_code','',
+  'logo_url',''
+))
+ON CONFLICT (key) DO UPDATE
+SET value_json =
+  COALESCE(settings.value_json, '{}'::jsonb) ||
+  (EXCLUDED.value_json - ARRAY(
+    SELECT jsonb_object_keys(COALESCE(settings.value_json, '{}'::jsonb))
+  ));
+"""
+    run(["docker","compose","-f",os.fspath(compose_file),"exec","-T","db","psql",
+         "-U",db_user,"-d",db_name,"-v","ON_ERROR_STOP=1","-c",biz_upsert], check=False)
+
+    ok("Settings defaults ensured.")
 
 # ---------- (NEW) Pre-Install + Preflight ----------
 
@@ -688,7 +717,11 @@ def preinstall_and_preflight(args, target: str, root_dir: Path):
     except Exception:
         pass
 
-    ports = [args.app_port, 5432, 6379]
+    ports = [args.app_port, 5432]
+    if not args.no_redis:
+        ports += [6379]
+    if not args.no_mailpit:
+        ports += [1025, 8025]
     if not args.no_minio:
         ports += [9000, 9003]
     busy = [p for p in ports if port_in_use(p)]
@@ -832,8 +865,8 @@ def smoke_tests(app_port: int) -> bool:
 
 def main():
     ap = argparse.ArgumentParser(description="AxEin – Bootstrap (cross-platform)")
-    ap.add_argument("--repo", default="", help="Git repo URL (HTTPS/SSH). If empty, you will be prompted.")
-    ap.add_argument("--branch", default="main")
+    ap.add_argument("--repo", default=REPO_DEFAULT, help=f"Git repo URL (default: {REPO_DEFAULT})")
+    ap.add_argument("--branch", default=BRANCH_DEFAULT, help=f"Git branch (default: {BRANCH_DEFAULT})")
     ap.add_argument("--app-port", type=int, default=3000)
 
     # DB & system
@@ -847,6 +880,8 @@ def main():
     # Options
     ap.add_argument("--force-clean", action="store_true", help="DESTROYS existing Postgres data for a clean init.")
     ap.add_argument("--license-public-key", default="", help="SPKI base64 for LICENSE_PUBLIC_KEY (optional).")
+    ap.add_argument("--no-redis", action="store_true", help="Skip Redis service.")
+    ap.add_argument("--no-mailpit", action="store_true", help="Skip Mailpit (SMTP dev inbox) service.")
     ap.add_argument("--no-minio", action="store_true", help="Skip MinIO service & seeding.")
     ap.add_argument("--web-image", default=WEB_IMAGE_DEFAULT, help="Prebuilt web image (GHCR). Empty = build from source.")
     ap.add_argument("--ghcr-username", default="", help="GHCR username for docker login")
@@ -884,10 +919,10 @@ def main():
     # ---------- Preflight ----------
     preinstall_and_preflight(args, target=("Windows" if target=="Windows" else "Unix"), root_dir=root_dir)
 
-    repo_url = args.repo.strip() or input("Enter your Git repo URL (HTTPS/SSH): ").strip()
+    repo_url = args.repo.strip()
     if not repo_url:
-        fail("Repo URL is required.")
-        sys.exit(2)
+        repo_url = input(f"Enter your Git repo URL (Enter for {REPO_DEFAULT}): ").strip() or REPO_DEFAULT
+    ok(f"Using repo: {repo_url} (branch: {args.branch})")
 
     for p in [app_dir, logs_dir, data_dir, pgdata_dir, init_dir, backups_dir]:
         ensure_dir(p)
@@ -906,7 +941,7 @@ def main():
         sys.exit(2)
 
     # GHCR login (optional but recommended for tag listing/private pulls)
-    if args.ghcr_username and args.ghcr_token and args.web_image:
+    if args.web_image and args.web_image.strip() and args.ghcr_username and args.ghcr_token:
         info("Logging into GHCR…")
         if target == "Unix":
             run(["bash","-lc", f"echo '{args.ghcr_token}' | docker login ghcr.io -u {args.ghcr_username} --password-stdin"], check=False)
@@ -914,10 +949,14 @@ def main():
             run(["powershell","-NoProfile","-Command", f"$p='{args.ghcr_token}'; $p | docker login ghcr.io -u {args.ghcr_username} --password-stdin"], check=False)
         ok("GHCR login attempted.")
 
-    # Interactive web image selection (GHCR)
-    owner, name = GHCR_OWNER_DEFAULT, GHCR_NAME_DEFAULT
-    picked_image = choose_web_image(args.web_image or WEB_IMAGE_DEFAULT, owner, name, args.ghcr_token.strip())
-    ok(f"Using web image: {picked_image}")
+    # Web image selection: if --web-image is empty, we build from source (recommended).
+    picked_image: str | None = None
+    if args.web_image and args.web_image.strip():
+        owner, name = GHCR_OWNER_DEFAULT, GHCR_NAME_DEFAULT
+        picked_image = choose_web_image(args.web_image, owner, name, args.ghcr_token.strip())
+        ok(f"Using web image: {picked_image}")
+    else:
+        ok("No --web-image provided; will build web from source (local image).")
 
     # Clone/pull
     if (app_dir / ".git").exists():
@@ -940,11 +979,16 @@ def main():
                   db_user=args.db_user, db_pass=args.db_pass, db_name=args.db_name,
                   pg_superuser=args.pg_superuser, pg_superpwd=args.pg_superpwd,
                   license_pubkey=discovered_key,
+                  enable_redis=(not args.no_redis),
+                  enable_mailpit=(not args.no_mailpit),
                   enable_minio=(not args.no_minio), web_image=(picked_image or None),
                   host_os=host_os, host_arch=host_arch)
 
     write_env_file(dest=env_file, app_port=args.app_port, tz=args.tz, db_user=args.db_user, db_pass=args.db_pass,
-                   db_name=args.db_name, enable_minio=(not args.no_minio),
+                   db_name=args.db_name,
+                   enable_redis=(not args.no_redis),
+                   enable_mailpit=(not args.no_mailpit),
+                   enable_minio=(not args.no_minio),
                    base_url=f"http://localhost:{args.app_port}", license_pubkey=discovered_key)
 
     # First-run SQL
