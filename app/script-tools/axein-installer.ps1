@@ -13,14 +13,17 @@
 
 param(
   [Parameter(Mandatory=$false)]
-  [string] $RepoUrl = "",
+  [string] $RepoUrl = "https://github.com/shaikhismail142/Axein-Billing_Promedix.git",
   [Parameter(Mandatory=$false)]
-  [string] $Branch  = "main",
+  [string] $Branch  = "codex/healthcare-customization",
+  [Parameter(Mandatory=$false)]
+  [string] $WebImage = "ghcr.io/shaikhismail142/axein-billing-promedix:2026-02-07-v1",
   [Parameter(Mandatory=$false)]
   [int]    $AppPort = 3000,
   [switch] $SkipRedis,
   [switch] $SkipMinio,
-  [switch] $SkipMailpit
+  [switch] $SkipMailpit,
+  [switch] $BuildFromSource
 )
 
 $ErrorActionPreference = 'Stop'
@@ -196,34 +199,7 @@ if (-not $SkipMinio) { $depends += "      minio:\n        condition: service_hea
 if (-not $SkipMailpit) { $depends += "      mailpit:\n        condition: service_started" }
 $dependsBlock = ($depends -join "\n")
 
-$compose = @"
-name: axein
-services:
-  db:
-    image: postgres:16.4
-    environment:
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgrespass
-      TZ: Asia/Kolkata
-    ports: ["5432:5432"]
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres"]
-      interval: 10s
-      timeout: 5s
-      retries: 12
-    shm_size: "1g"
-    volumes:
-      - type: bind
-        source: $($PGDATA_DIR -replace '\\','/')
-        target: /var/lib/postgresql/data
-      - type: bind
-        source: $($BACKUPS_DIR -replace '\\','/')
-        target: /backups
-      - type: bind
-        source: $((Join-Path $APP_DIR 'init') -replace '\\','/')
-        target: /docker-entrypoint-initdb.d
-
-$redisBlock$minioBlock$mailpitBlock
+$webBlock = if ($BuildFromSource) { @"
   web:
     build:
       context: $((Join-Path $APP_DIR 'app') -replace '\\','/')
@@ -252,6 +228,64 @@ $dependsBlock
       S3_FORCE_PATH_STYLE: "true"
     ports: ["$AppPort:3000"]
     restart: unless-stopped
+"@ } else { @"
+  web:
+    image: $WebImage
+    depends_on:
+$dependsBlock
+    environment:
+      NODE_ENV: production
+      TZ: Asia/Kolkata
+      PORT: "3000"
+      NEXT_PUBLIC_BASE_URL: http://localhost:$AppPort
+      DATABASE_URL: postgresql://axeindb:axeindbpass@db:5432/axeindb
+      POSTGRES_HOST: db
+      POSTGRES_PORT: "5432"
+      POSTGRES_USER: axeindb
+      POSTGRES_PASSWORD: axeindbpass
+      POSTGRES_DB: axeindb
+      LICENSE_PUBLIC_KEY: "$pub"
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      S3_ENDPOINT: http://minio:9000
+      S3_KEY: minioadmin
+      S3_SECRET: minioadmin
+      S3_BUCKET: axein
+      S3_REGION: ap-south-1
+      S3_FORCE_PATH_STYLE: "true"
+    ports: ["$AppPort:3000"]
+    restart: unless-stopped
+"@ }
+
+$compose = @"
+name: axein
+services:
+  db:
+    image: postgres:16.4
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgrespass
+      TZ: Asia/Kolkata
+    ports: ["5432:5432"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+    shm_size: "1g"
+    volumes:
+      - type: bind
+        source: $($PGDATA_DIR -replace '\\','/')
+        target: /var/lib/postgresql/data
+      - type: bind
+        source: $($BACKUPS_DIR -replace '\\','/')
+        target: /backups
+      - type: bind
+        source: $((Join-Path $APP_DIR 'init') -replace '\\','/')
+        target: /docker-entrypoint-initdb.d
+
+$redisBlock$minioBlock$mailpitBlock
+$webBlock
 "@
 
 Set-Content -Path $COMPOSE_FILE -Value $compose -Encoding UTF8
