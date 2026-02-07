@@ -692,6 +692,31 @@ def install_node(target: str):
     else:
         warn("Node.js installation may have failed. Proceeding will likely fail later.")
 
+def resolve_node_exe() -> str | None:
+    # 1) PATH
+    if shutil.which("node"):
+        return shutil.which("node")
+    # 2) Common Windows paths
+    candidates = []
+    pf = os.environ.get("ProgramFiles")
+    pfx86 = os.environ.get("ProgramFiles(x86)")
+    if pf:
+        candidates.append(os.path.join(pf, "nodejs", "node.exe"))
+    if pfx86:
+        candidates.append(os.path.join(pfx86, "nodejs", "node.exe"))
+    for c in candidates:
+        if c and os.path.exists(c):
+            return c
+    return None
+
+def ensure_node_on_path():
+    node_exe = resolve_node_exe()
+    if not node_exe:
+        return
+    node_dir = os.path.dirname(node_exe)
+    if node_dir and node_dir not in os.environ.get("PATH",""):
+        os.environ["PATH"] = node_dir + os.pathsep + os.environ.get("PATH","")
+
 def install_docker(target: str):
     if shutil.which("docker"):
         return
@@ -748,6 +773,7 @@ def preinstall_and_preflight(args, target: str, root_dir: Path):
     install_docker(target)
     # Node is used for license signing (tools/license-keygen/sign-license.js)
     install_node(target)
+    ensure_node_on_path()
 
     if platform.system() == "Darwin" and shutil.which("open"):
         run(["open","-g","-a","Docker"], check=False)
@@ -902,6 +928,20 @@ def wait_for_web_ready(app_port: int, compose_file: Path, timeout_sec=240) -> bo
     warn("Web did not return 200 in time.")
     return False
 
+def docker_login_ghcr(username: str, token: str, target: str) -> bool:
+    if not username or not token:
+        return False
+    info("Logging into GHCR…")
+    if target == "Unix":
+        rc = run(["bash","-lc", f"echo '{token}' | docker login ghcr.io -u {username} --password-stdin"], check=False)
+    else:
+        rc = run(["powershell","-NoProfile","-Command", f"$p='{token}'; $p | docker login ghcr.io -u {username} --password-stdin"], check=False)
+    if rc == 0:
+        ok("GHCR login succeeded.")
+        return True
+    warn("GHCR login failed.")
+    return False
+
 
 def smoke_tests(app_port: int) -> bool:
     info("Running smoke tests…")
@@ -989,7 +1029,8 @@ def prompt_license_details():
     }
 
 def sign_license_with_node(app_dir: Path, license_key: str, email: str, expires_iso: str) -> dict | None:
-    if not shutil.which("node"):
+    node_exe = resolve_node_exe()
+    if not node_exe:
         warn("Node.js not found; cannot generate license.")
         return None
     key_path = app_dir / "tools" / "license-keygen" / "ed25519-private.pem"
@@ -999,7 +1040,7 @@ def sign_license_with_node(app_dir: Path, license_key: str, email: str, expires_
         return None
 
     cmd = [
-        "node",
+        node_exe,
         os.fspath(sign_script),
         "--key", os.fspath(key_path),
         "--license", license_key,
@@ -1161,12 +1202,7 @@ def main():
 
     # GHCR login (optional but recommended for tag listing/private pulls)
     if args.web_image and args.web_image.strip() and args.ghcr_username and args.ghcr_token:
-        info("Logging into GHCR…")
-        if target == "Unix":
-            run(["bash","-lc", f"echo '{args.ghcr_token}' | docker login ghcr.io -u {args.ghcr_username} --password-stdin"], check=False)
-        else:
-            run(["powershell","-NoProfile","-Command", f"$p='{args.ghcr_token}'; $p | docker login ghcr.io -u {args.ghcr_username} --password-stdin"], check=False)
-        ok("GHCR login attempted.")
+        docker_login_ghcr(args.ghcr_username, args.ghcr_token, target)
 
     # Web image selection: default to image (recommended for Windows)
     picked_image: str | None = None
@@ -1176,6 +1212,17 @@ def main():
     else:
         web_image = (args.web_image or "").strip()
         if web_image:
+            # If GHCR image and no creds, prompt
+            if web_image.startswith("ghcr.io/") and not args.ghcr_token:
+                prompt = input("GHCR image may be private. Login now? [Y/n]: ").strip().lower()
+                if prompt in ("", "y", "yes"):
+                    default_user = web_image.split("/")[1] if "/" in web_image else GHCR_OWNER_DEFAULT
+                    gh_user = input(f"GHCR username (default {default_user}): ").strip() or default_user
+                    gh_token = input("GHCR token (PAT with read:packages): ").strip()
+                    if gh_token:
+                        args.ghcr_username = gh_user
+                        args.ghcr_token = gh_token
+                        docker_login_ghcr(gh_user, gh_token, target)
             if args.ghcr_token:
                 owner, name = GHCR_OWNER_DEFAULT, GHCR_NAME_DEFAULT
                 picked_image = choose_web_image(web_image, owner, name, args.ghcr_token.strip())
@@ -1200,6 +1247,9 @@ def main():
     discovered_key = load_license_pubkey(app_dir, args.license_public_key.strip() or None)
     if discovered_key:
         ok(f"LICENSE_PUBLIC_KEY detected (starts with): {discovered_key[:16]}…")
+    else:
+        info_path = app_dir / "tools" / "license-keygen" / "info.json"
+        warn(f"LICENSE_PUBLIC_KEY not found. Expected at: {info_path}")
 
     # Compose & env (always GENERATED)
     write_compose(dest=compose_file, root_dir=root_dir, app_dir=app_dir, app_port=args.app_port, tz=args.tz,
