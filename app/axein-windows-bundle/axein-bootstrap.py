@@ -518,7 +518,7 @@ def migration_candidates(app_dir: Path, mode: str) -> list[Path]:
     out: list[Path] = []
     for fp in all_sql:
         nm = fp.name
-        if nm == "999_app_compat.sql" or re.match(r"^202\\d{8}.*\\.sql$", nm) or re.match(r"^202\\d{8}[a-z].*\\.sql$", nm):
+        if nm == "999_app_compat.sql" or re.match(r"^202\d{8}.*\.sql$", nm) or re.match(r"^202\d{8}[a-z].*\.sql$", nm):
             out.append(fp)
     return sorted(out, key=lambda p: p.name)
 
