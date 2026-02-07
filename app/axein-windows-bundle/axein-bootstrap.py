@@ -441,7 +441,12 @@ def ensure_products_meta(compose_file: Path, db_name: str, db_user: str):
     run([
         "docker","compose","-f",os.fspath(compose_file),"exec","-T","db",
         "psql","-U",db_user,"-d",db_name,"-v","ON_ERROR_STOP=1","-c",
-        "ALTER TABLE products ADD COLUMN IF NOT EXISTS meta JSONB NOT NULL DEFAULT '{}'::jsonb;"
+        """DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema='public' AND table_name='products') THEN
+    ALTER TABLE products ADD COLUMN IF NOT EXISTS meta JSONB NOT NULL DEFAULT '{}'::jsonb;
+  END IF;
+END $$;"""
     ], check=False)
 
 
@@ -450,7 +455,12 @@ def ensure_sale_items_meta(compose_file: Path, db_name: str, db_user: str):
     run([
         "docker","compose","-f",os.fspath(compose_file),"exec","-T","db",
         "psql","-U",db_user,"-d",db_name,"-v","ON_ERROR_STOP=1","-c",
-        "ALTER TABLE sale_items ADD COLUMN IF NOT EXISTS meta JSONB NOT NULL DEFAULT '{}'::jsonb;"
+        """DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema='public' AND table_name='sale_items') THEN
+    ALTER TABLE sale_items ADD COLUMN IF NOT EXISTS meta JSONB NOT NULL DEFAULT '{}'::jsonb;
+  END IF;
+END $$;"""
     ], check=False)
 
 
@@ -459,7 +469,12 @@ def ensure_sales_meta(compose_file: Path, db_name: str, db_user: str):
     run([
         "docker","compose","-f",os.fspath(compose_file),"exec","-T","db",
         "psql","-U",db_user,"-d",db_name,"-v","ON_ERROR_STOP=1","-c",
-        "ALTER TABLE sales ADD COLUMN IF NOT EXISTS meta JSONB NOT NULL DEFAULT '{}'::jsonb;"
+        """DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema='public' AND table_name='sales') THEN
+    ALTER TABLE sales ADD COLUMN IF NOT EXISTS meta JSONB NOT NULL DEFAULT '{}'::jsonb;
+  END IF;
+END $$;"""
     ], check=False)
 
 
@@ -471,6 +486,10 @@ def tables_missing(compose_file: Path, db_name: str, db_user: str, expected: lis
     missing = [t for t in expected if t not in have]
     return missing
 
+
+SOFT_FAIL_MIGRATIONS = {
+    "0114_inventory_stock_ledger.sql",
+}
 
 def migration_candidates(app_dir: Path, mode: str) -> list[Path]:
     mig_dir = app_dir / "db" / "migrations"
@@ -529,8 +548,11 @@ def auto_migrate(compose_file: Path, app_dir: Path, db_name: str, db_user: str) 
     for fp in cands:
         ok(f"→ {fp.name}")
         if not apply_sql_file(compose_file, fp, db_name, db_user):
-            all_ok = False
             warn(f"Migration failed for {fp.name}")
+            if fp.name in SOFT_FAIL_MIGRATIONS:
+                warn(f"Continuing despite failure of {fp.name} (marked as soft-fail).")
+                continue
+            all_ok = False
             break
 
     still_missing_core = tables_missing(compose_file, db_name, db_user, expected=CORE_TABLES)
@@ -565,6 +587,15 @@ ON CONFLICT (key) DO NOTHING;
 
 def seed_settings_defaults(compose_file: Path, db_name: str, db_user: str):
     info("Seeding required settings defaults (idempotent)…")
+    # Skip if settings table doesn't exist yet
+    table_check = run_out([
+        "docker","compose","-f",os.fspath(compose_file),"exec","-T","db",
+        "psql","-U",db_user,"-d",db_name,"-Atqc",
+        "SELECT 1 FROM information_schema.tables WHERE table_schema='public' AND table_name='settings' LIMIT 1;"
+    ], check=False).strip()
+    if table_check != "1":
+        warn("Settings table not found yet; skipping settings seed for now.")
+        return
 
     # inventory.near_expiry_days (used by /inventory/expiry + alerts)
     inv_upsert = r"""
@@ -1098,22 +1129,20 @@ def prompt_license_details():
         term_months = 12
 
     today_str = datetime.now().strftime("%Y-%m-%d")
-    start_str = input(f"Start date (YYYY-MM-DD) (default: {today_str}): ").strip() or today_str
-    while True:
-        try:
-            start_date = parse_date_yyyy_mm_dd(start_str)
-            break
-        except Exception:
-            start_str = input("  Please use YYYY-MM-DD: ").strip() or today_str
+    start_date = parse_date_yyyy_mm_dd(today_str)
+    use_custom = input(f"Start date will be {today_str}. Use a different start date? [y/N]: ").strip().lower()
+    if use_custom in ("y", "yes"):
+        start_str = input("Start date (YYYY-MM-DD): ").strip() or today_str
+        while True:
+            try:
+                start_date = parse_date_yyyy_mm_dd(start_str)
+                break
+            except Exception:
+                start_str = input("  Please use YYYY-MM-DD: ").strip() or today_str
 
     computed_end = compute_expiry(start_date, term_months)
-    end_str = input(f"End date (YYYY-MM-DD) (default: {computed_end}): ").strip() or str(computed_end)
-    while True:
-        try:
-            end_date = parse_date_yyyy_mm_dd(end_str)
-            break
-        except Exception:
-            end_str = input("  Please use YYYY-MM-DD: ").strip() or str(computed_end)
+    end_date = computed_end
+    print(f"License end date will be: {end_date}")
 
     phone = input("Phone (optional): ").strip()
     gstin = input("GSTIN (optional): ").strip()
@@ -1374,6 +1403,32 @@ def main():
             if discovered_key:
                 ok(f"LICENSE_PUBLIC_KEY generated (starts with): {discovered_key[:16]}…")
 
+    # Ask for license details early and generate payload for copy/paste
+    license_payload = None
+    try:
+        gen_now = input("Generate license payload now? [Y/n]: ").strip().lower()
+        if gen_now in ("", "y", "yes"):
+            details = prompt_license_details()
+            license_key = generate_license_key()
+            expires_iso = f"{details['end_date']}T23:59:59.000Z"
+            license_payload = sign_license_with_node(
+                app_dir=app_src_dir,
+                license_key=license_key,
+                email=details["email"],
+                expires_iso=expires_iso,
+            )
+            if license_payload:
+                print("\n--- License Payload (copy/paste) ---")
+                print(json.dumps(license_payload, indent=2))
+                print("------------------------------------\n")
+                home = Path(os.path.expanduser("~"))
+                downloads = home / "Downloads"
+                saved = save_license_txt(license_payload, downloads)
+                if saved:
+                    ok(f"License saved to: {saved}")
+    except Exception as e:
+        warn(f"License generation skipped due to error: {e}")
+
     # Compose & env (always GENERATED)
     write_compose(dest=compose_file, root_dir=root_dir, app_dir=app_src_dir, app_port=args.app_port, tz=args.tz,
                   db_user=args.db_user, db_pass=args.db_pass, db_name=args.db_name,
@@ -1450,50 +1505,14 @@ def main():
         warn(f"Web did not return 200 on /. Run 'docker compose -f {compose_file} logs -f web' for details.")
     all_ok = smoke_tests(args.app_port)
 
-    # License flow (interactive)
-    try:
-        do_license = input("Generate and apply license now? [Y/n]: ").strip().lower()
-        if do_license in ("", "y", "yes"):
-            details = prompt_license_details()
-            license_key = generate_license_key()
-            expires_iso = f"{details['end_date']}T23:59:59.000Z"
-
-            payload = sign_license_with_node(
-                app_dir=app_src_dir,
-                license_key=license_key,
-                email=details["email"],
-                expires_iso=expires_iso,
-            )
-            if payload:
-                print("\n--- License Payload (copy/paste) ---")
-                print(json.dumps(payload, indent=2))
-                print("------------------------------------\n")
-
-                # Apply license in app
-                apply_license(args.app_port, payload)
-
-                # Update business settings
-                apply_business_settings(
-                    app_port=args.app_port,
-                    company=details["company"],
-                    email=details["email"],
-                    phone=details["phone"],
-                    gstin=details["gstin"],
-                    state_code=details["state_code"],
-                )
-
-                # Save license to Downloads
-                home = Path(os.path.expanduser("~"))
-                downloads = home / "Downloads"
-                saved = save_license_txt(payload, downloads)
-                if saved:
-                    ok(f"License saved to: {saved}")
-                else:
-                    warn("License file not saved. You can copy the payload from console if needed.")
-            else:
-                warn("License generation failed. You can try again later in Settings → License.")
-    except Exception as e:
-        warn(f"License flow skipped due to error: {e}")
+    # Apply license (optional) once web is up
+    if license_payload:
+        try:
+            do_apply = input("Apply license to running app now? [Y/n]: ").strip().lower()
+            if do_apply in ("", "y", "yes"):
+                apply_license(args.app_port, license_payload)
+        except Exception as e:
+            warn(f"License apply skipped due to error: {e}")
 
     # Helper
     ensure_dir(helper_dir)
