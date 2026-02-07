@@ -213,6 +213,8 @@ def write_compose(dest: Path, root_dir: Path, app_dir: Path, app_port: int, tz: 
     web_dep_minio = "\n      minio:\n        condition: service_healthy" if enable_minio else ""
     web_dep_mailpit = "\n      mailpit:\n        condition: service_started" if enable_mailpit else ""
 
+    redis_env_block = "      REDIS_HOST: redis\n      REDIS_PORT: \"6379\"\n" if enable_redis else ""
+
     redis_service = """
   redis:
     image: redis:7
@@ -240,7 +242,7 @@ def write_compose(dest: Path, root_dir: Path, app_dir: Path, app_port: int, tz: 
       POSTGRES_USER: {db_user}
       POSTGRES_PASSWORD: {db_pass}
       POSTGRES_DB: {db_name}
-{("      REDIS_HOST: redis\n      REDIS_PORT: \"6379\"\n" if enable_redis else "").rstrip()}
+{redis_env_block.rstrip()}
       S3_ENDPOINT: {"http://minio:9000" if enable_minio else ""}
       S3_KEY: {"minioadmin" if enable_minio else ""}
       S3_SECRET: {"minioadmin" if enable_minio else ""}
@@ -274,7 +276,7 @@ def write_compose(dest: Path, root_dir: Path, app_dir: Path, app_port: int, tz: 
       POSTGRES_USER: {db_user}
       POSTGRES_PASSWORD: {db_pass}
       POSTGRES_DB: {db_name}
-{("      REDIS_HOST: redis\n      REDIS_PORT: \"6379\"\n" if enable_redis else "").rstrip()}
+{redis_env_block.rstrip()}
       S3_ENDPOINT: {"http://minio:9000" if enable_minio else ""}
       S3_KEY: {"minioadmin" if enable_minio else ""}
       S3_SECRET: {"minioadmin" if enable_minio else ""}
