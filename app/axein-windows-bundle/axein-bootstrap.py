@@ -133,21 +133,29 @@ def load_license_pubkey(app_dir: Path, cli_key: str | None) -> str | None:
         ok("Using LICENSE_PUBLIC_KEY from CLI flag.")
         return cli_key.strip()
 
-    # 2) tools/license-keygen/info.json
-    info_json = app_dir / "tools" / "license-keygen" / "info.json"
-    if info_json.exists():
-        try:
-            j = json.loads(info_json.read_text(encoding="utf-8"))
-            for k in ("publicKeyBase64", "publicKey_spki_base64", "public", "spki"):
-                v = j.get(k)
-                if isinstance(v, str) and v.strip():
-                    ok("Using LICENSE_PUBLIC_KEY from tools/license-keygen/info.json.")
-                    return v.strip()
-        except Exception as e:
-            warn(f"Could not parse {info_json}: {e}")
+    # 2) tools/license-keygen/info.json (support repo layouts)
+    for info_json in (
+        app_dir / "tools" / "license-keygen" / "info.json",
+        app_dir / "app" / "tools" / "license-keygen" / "info.json",
+    ):
+        if info_json.exists():
+            try:
+                j = json.loads(info_json.read_text(encoding="utf-8"))
+                for k in ("publicKeyBase64", "publicKey_spki_base64", "public", "spki"):
+                    v = j.get(k)
+                    if isinstance(v, str) and v.strip():
+                        ok("Using LICENSE_PUBLIC_KEY from tools/license-keygen/info.json.")
+                        return v.strip()
+            except Exception as e:
+                warn(f"Could not parse {info_json}: {e}")
 
     # 3) .env.template (preferred) or .env.example (fallback)
-    for env_candidate in (app_dir / ".env.template", app_dir / ".env.example"):
+    for env_candidate in (
+        app_dir / ".env.template",
+        app_dir / ".env.example",
+        app_dir / "app" / ".env.template",
+        app_dir / "app" / ".env.example",
+    ):
         if not env_candidate.exists():
             continue
         try:
@@ -975,6 +983,20 @@ def wait_for_web_ready(app_port: int, compose_file: Path, timeout_sec=240) -> bo
     warn("Web did not return 200 in time.")
     return False
 
+def resolve_app_src(repo_dir: Path) -> Path:
+    """
+    Support repo layouts:
+      - repo/app (Next.js app lives here)
+      - repo (Next.js app at root)
+    """
+    if (repo_dir / "app" / "package.json").exists():
+        return repo_dir / "app"
+    if (repo_dir / "package.json").exists():
+        return repo_dir
+    if (repo_dir / "app").exists():
+        return repo_dir / "app"
+    return repo_dir
+
 def docker_login_ghcr(username: str, token: str, target: str) -> bool:
     if not username or not token:
         return False
@@ -1015,7 +1037,10 @@ def maybe_reexec_with_repo_script(app_dir: Path, allow_reexec: bool = True):
         return
     try:
         current = Path(__file__).resolve()
-        repo_script = (app_dir / "axein-windows-bundle" / "axein-bootstrap.py").resolve()
+        repo_script = (app_dir / "axein-windows-bundle" / "axein-bootstrap.py")
+        if not repo_script.exists():
+            repo_script = (app_dir / "app" / "axein-windows-bundle" / "axein-bootstrap.py")
+        repo_script = repo_script.resolve()
         if not repo_script.exists():
             return
         if current == repo_script:
@@ -1247,7 +1272,7 @@ def main():
         root_dir = Path.home() / "AxEin"
         helper_dir = Path.home() / ".axein"
 
-    app_dir     = root_dir / "app"
+    repo_dir    = root_dir / "app"
     logs_dir    = root_dir / "logs"
     data_dir    = root_dir / "data"
     pgdata_dir  = data_dir / "postgres"
@@ -1264,7 +1289,7 @@ def main():
         repo_url = input(f"Enter your Git repo URL (Enter for {REPO_DEFAULT}): ").strip() or REPO_DEFAULT
     ok(f"Using repo: {repo_url} (branch: {args.branch})")
 
-    for p in [app_dir, logs_dir, data_dir, pgdata_dir, init_dir, backups_dir]:
+    for p in [repo_dir, logs_dir, data_dir, pgdata_dir, init_dir, backups_dir]:
         ensure_dir(p)
 
     if args.force_clean and pgdata_dir.exists():
@@ -1317,38 +1342,40 @@ def main():
             ok("No --web-image provided; will build web from source (local image).")
 
     # Clone/pull
-    if (app_dir / ".git").exists():
+    if (repo_dir / ".git").exists():
         info(f"Repo exists, pulling latest ({args.branch})…")
-        run(["git","-C",os.fspath(app_dir),"fetch","--all","--prune"], check=False)
-        run(["git","-C",os.fspath(app_dir),"checkout",args.branch])
-        run(["git","-C",os.fspath(app_dir),"pull","--ff-only","origin",args.branch], check=False)
+        run(["git","-C",os.fspath(repo_dir),"fetch","--all","--prune"], check=False)
+        run(["git","-C",os.fspath(repo_dir),"checkout",args.branch])
+        run(["git","-C",os.fspath(repo_dir),"pull","--ff-only","origin",args.branch], check=False)
     else:
-        info(f"Cloning {repo_url} ({args.branch}) into {app_dir}…")
-        run(["git","clone","--branch",args.branch,"--single-branch",repo_url,os.fspath(app_dir)])
+        info(f"Cloning {repo_url} ({args.branch}) into {repo_dir}…")
+        run(["git","clone","--branch",args.branch,"--single-branch",repo_url,os.fspath(repo_dir)])
     ok("Source code ready.")
 
     # If running from a copied script, re-exec from repo for latest fixes
-    maybe_reexec_with_repo_script(app_dir, allow_reexec=(not args.no_reexec))
+    maybe_reexec_with_repo_script(repo_dir, allow_reexec=(not args.no_reexec))
+
+    app_src_dir = resolve_app_src(repo_dir)
 
     # Discover LICENSE_PUBLIC_KEY automatically
-    discovered_key = load_license_pubkey(app_dir, args.license_public_key.strip() or None)
+    discovered_key = load_license_pubkey(app_src_dir, args.license_public_key.strip() or None)
     if discovered_key:
         ok(f"LICENSE_PUBLIC_KEY detected (starts with): {discovered_key[:16]}…")
     else:
-        info_path = app_dir / "tools" / "license-keygen" / "info.json"
+        info_path = app_src_dir / "tools" / "license-keygen" / "info.json"
         warn(f"LICENSE_PUBLIC_KEY not found. Expected at: {info_path}")
         # Attempt to generate keys if missing
         node_exe = resolve_node_exe()
-        init_script = app_dir / "tools" / "license-keygen" / "init-keys.js"
+        init_script = app_src_dir / "tools" / "license-keygen" / "init-keys.js"
         if node_exe and init_script.exists():
             warn("Attempting to generate license keys locally...")
             run([node_exe, os.fspath(init_script)], check=False)
-            discovered_key = load_license_pubkey(app_dir, args.license_public_key.strip() or None)
+            discovered_key = load_license_pubkey(app_src_dir, args.license_public_key.strip() or None)
             if discovered_key:
                 ok(f"LICENSE_PUBLIC_KEY generated (starts with): {discovered_key[:16]}…")
 
     # Compose & env (always GENERATED)
-    write_compose(dest=compose_file, root_dir=root_dir, app_dir=app_dir, app_port=args.app_port, tz=args.tz,
+    write_compose(dest=compose_file, root_dir=root_dir, app_dir=app_src_dir, app_port=args.app_port, tz=args.tz,
                   db_user=args.db_user, db_pass=args.db_pass, db_name=args.db_name,
                   pg_superuser=args.pg_superuser, pg_superpwd=args.pg_superpwd,
                   license_pubkey=discovered_key,
@@ -1377,7 +1404,7 @@ def main():
             fallback = input("Switch to build-from-source instead? [Y/n]: ").strip().lower()
             if fallback in ("", "y", "yes"):
                 picked_image = None
-                write_compose(dest=compose_file, root_dir=root_dir, app_dir=app_dir, app_port=args.app_port, tz=args.tz,
+                write_compose(dest=compose_file, root_dir=root_dir, app_dir=app_src_dir, app_port=args.app_port, tz=args.tz,
                               db_user=args.db_user, db_pass=args.db_pass, db_name=args.db_name,
                               pg_superuser=args.pg_superuser, pg_superpwd=args.pg_superpwd,
                               license_pubkey=discovered_key,
@@ -1404,13 +1431,13 @@ def main():
     ensure_sale_items_meta(compose_file, args.db_name, args.db_user)
 
     # Auto-migrate if needed
-    if not auto_migrate(compose_file, app_dir, args.db_name, args.db_user):
+    if not auto_migrate(compose_file, app_src_dir, args.db_name, args.db_user):
         warn("Attempting a second migration pass after grants…")
         ensure_role_db_after_start(compose_file, args.db_name, args.db_user, args.db_pass, args.pg_superuser)
         ensure_products_meta(compose_file, args.db_name, args.db_user)
         ensure_sales_meta(compose_file, args.db_name, args.db_user)
         ensure_sale_items_meta(compose_file, args.db_name, args.db_user)
-        if not auto_migrate(compose_file, app_dir, args.db_name, args.db_user):
+        if not auto_migrate(compose_file, app_src_dir, args.db_name, args.db_user):
             fail("Database migrations failed. Check SQL under app/db/migrations and DB logs.")
 
     # Optional post-migration seeds
@@ -1432,7 +1459,7 @@ def main():
             expires_iso = f"{details['end_date']}T23:59:59.000Z"
 
             payload = sign_license_with_node(
-                app_dir=app_dir,
+                app_dir=app_src_dir,
                 license_key=license_key,
                 email=details["email"],
                 expires_iso=expires_iso,
