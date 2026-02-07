@@ -1115,9 +1115,14 @@ def prompt_license_details():
     while not company:
         company = input("  Please enter company name: ").strip()
 
-    email = input("Company email (required): ").strip()
-    while not email or not re.match(r"^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$", email):
-        email = input("  Please enter a valid email: ").strip()
+    email = input("Company email (required, or type 'skip' to use admin@local): ").strip()
+    while True:
+        if email.lower() == "skip":
+            email = "admin@local"
+            break
+        if email and ("@" in email) and ("." in email.split("@")[-1]):
+            break
+        email = input("  Please enter a valid email (or 'skip'): ").strip()
 
     term_raw = (input("License term in months [6/12] (default: 12): ").strip() or "12")
     try:
