@@ -1172,7 +1172,7 @@ def sign_license_with_node(app_dir: Path, license_key: str, email: str, expires_
     key_path = app_dir / "tools" / "license-keygen" / "ed25519-private.pem"
     sign_script = app_dir / "tools" / "license-keygen" / "sign-license.js"
     if not key_path.exists() or not sign_script.exists():
-        warn("License signing files missing. Expected tools/license-keygen/ed25519-private.pem and sign-license.js")
+        warn(f"License signing files missing. Expected:\n  {key_path}\n  {sign_script}")
         return None
 
     cmd = [
@@ -1261,14 +1261,18 @@ def ensure_license_keys(app_src_dir: Path) -> bool:
     Ensure ed25519 private key exists (for signing). If missing, attempt to generate with init-keys.js.
     Returns True if private key exists after this step.
     """
-    key_path = app_src_dir / "tools" / "license-keygen" / "ed25519-private.pem"
+    tools_dir = app_src_dir / "tools" / "license-keygen"
+    key_path = tools_dir / "ed25519-private.pem"
     if key_path.exists():
         return True
     node_exe = resolve_node_exe()
-    init_script = app_src_dir / "tools" / "license-keygen" / "init-keys.js"
+    init_script = tools_dir / "init-keys.js"
     if node_exe and init_script.exists():
         warn("License private key missing. Generating new keypair locally…")
-        run([node_exe, os.fspath(init_script)], check=False)
+        if platform.system() == "Windows":
+            run(["powershell","-NoProfile","-Command", f"cd '{os.fspath(tools_dir)}'; & '{node_exe}' .\\init-keys.js"], check=False)
+        else:
+            run(["bash","-lc", f"cd '{os.fspath(tools_dir)}' && '{node_exe}' ./init-keys.js"], check=False)
     return key_path.exists()
 
 # ---------- Main ----------
