@@ -121,6 +121,16 @@ def http_get_status(host: str, port: int, path: str, timeout=5) -> int:
 
 # ---------- LICENSE_PUBLIC_KEY discovery ----------
 
+def resolve_license_tools_dir(app_dir: Path) -> Path | None:
+    candidates = [
+        app_dir / "tools" / "license-keygen",
+        app_dir / "app" / "tools" / "license-keygen",
+    ]
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+    return None
+
 def load_license_pubkey(app_dir: Path, cli_key: str | None) -> str | None:
     """
     Return base64 SPKI public key for license verification if available.
@@ -134,10 +144,14 @@ def load_license_pubkey(app_dir: Path, cli_key: str | None) -> str | None:
         return cli_key.strip()
 
     # 2) tools/license-keygen/info.json (support repo layouts)
+    tools_dir = resolve_license_tools_dir(app_dir)
     for info_json in (
+        tools_dir / "info.json" if tools_dir else None,
         app_dir / "tools" / "license-keygen" / "info.json",
         app_dir / "app" / "tools" / "license-keygen" / "info.json",
     ):
+        if info_json is None:
+            continue
         if info_json.exists():
             try:
                 j = json.loads(info_json.read_text(encoding="utf-8"))
@@ -1117,7 +1131,7 @@ def prompt_license_details():
 
     email = input("Company email (required, or type 'skip' to use admin@local): ").strip()
     while True:
-        if email.lower() == "skip":
+        if email.lower() == "skip" or email == "":
             email = "admin@local"
             break
         if email and ("@" in email) and ("." in email.split("@")[-1]):
@@ -1169,8 +1183,12 @@ def sign_license_with_node(app_dir: Path, license_key: str, email: str, expires_
     if not node_exe:
         warn("Node.js not found; cannot generate license.")
         return None
-    key_path = app_dir / "tools" / "license-keygen" / "ed25519-private.pem"
-    sign_script = app_dir / "tools" / "license-keygen" / "sign-license.js"
+    tools_dir = resolve_license_tools_dir(app_dir)
+    if not tools_dir:
+        warn("License keygen tools not found (tools/license-keygen missing).")
+        return None
+    key_path = tools_dir / "ed25519-private.pem"
+    sign_script = tools_dir / "sign-license.js"
     if not key_path.exists() or not sign_script.exists():
         warn(f"License signing files missing. Expected:\n  {key_path}\n  {sign_script}")
         return None
@@ -1261,7 +1279,10 @@ def ensure_license_keys(app_src_dir: Path) -> bool:
     Ensure ed25519 private key exists (for signing). If missing, attempt to generate with init-keys.js.
     Returns True if private key exists after this step.
     """
-    tools_dir = app_src_dir / "tools" / "license-keygen"
+    tools_dir = resolve_license_tools_dir(app_src_dir)
+    if not tools_dir:
+        warn("License keygen tools not found (tools/license-keygen missing).")
+        return False
     key_path = tools_dir / "ed25519-private.pem"
     if key_path.exists():
         return True
@@ -1415,14 +1436,11 @@ def main():
     if discovered_key:
         ok(f"LICENSE_PUBLIC_KEY detected (starts with): {discovered_key[:16]}…")
     else:
-        info_path = app_src_dir / "tools" / "license-keygen" / "info.json"
+        tools_dir = resolve_license_tools_dir(app_src_dir)
+        info_path = (tools_dir / "info.json") if tools_dir else (app_src_dir / "tools" / "license-keygen" / "info.json")
         warn(f"LICENSE_PUBLIC_KEY not found. Expected at: {info_path}")
         # Attempt to generate keys if missing
-        node_exe = resolve_node_exe()
-        init_script = app_src_dir / "tools" / "license-keygen" / "init-keys.js"
-        if node_exe and init_script.exists():
-            warn("Attempting to generate license keys locally...")
-            run([node_exe, os.fspath(init_script)], check=False)
+        if ensure_license_keys(app_src_dir):
             discovered_key = load_license_pubkey(app_src_dir, args.license_public_key.strip() or None)
             if discovered_key:
                 ok(f"LICENSE_PUBLIC_KEY generated (starts with): {discovered_key[:16]}…")
