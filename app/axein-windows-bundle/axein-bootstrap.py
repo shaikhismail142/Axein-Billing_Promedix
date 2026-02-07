@@ -46,7 +46,7 @@ BRANCH_DEFAULT       = "codex/healthcare-customization"
 # Image install (recommended for Windows)
 WEB_IMAGE_DEFAULT    = "ghcr.io/shaikhismail142/axein-billing-promedix:2026-02-07-v1"
 GHCR_OWNER_DEFAULT   = "shaikhismail142"
-GHCR_NAME_DEFAULT    = "axein-billing"
+GHCR_NAME_DEFAULT    = "axein-billing-promedix"
 
 # Used as a simple "is schema present?" gate before/after migrations.
 # Keep this minimal so an older DB doesn't force a full re-init.
@@ -687,8 +687,8 @@ def install_node(target: str):
                 run(["bash","-lc","sudo dnf install -y nodejs npm || sudo yum install -y nodejs npm"], check=False)
             else:
                 warn("Unknown Linux distro. Please install Node.js using your package manager.")
-    if shutil.which("node"):
-        ok("Node.js installed.")
+    if resolve_node_exe():
+        ok("Node.js installed (or already present).")
     else:
         warn("Node.js installation may have failed. Proceeding will likely fail later.")
 
@@ -865,14 +865,44 @@ def ghcr_list_tags(owner: str, name: str, token: str) -> list[tuple[str, str]]:
     return out
 
 
-def choose_web_image(base_image_default: str, owner: str, name: str, ghcr_token: str) -> str:
+def parse_image_ref(ref: str):
+    """
+    Returns (registry, owner, name, tag)
+    Examples:
+      ghcr.io/org/repo:tag -> ("ghcr.io","org","repo","tag")
+      org/repo:tag         -> ("ghcr.io","org","repo","tag")
+      repo:tag             -> ("ghcr.io","", "repo","tag")
+    """
+    ref = ref.strip()
+    registry = "ghcr.io"
+    tag = ""
+    # split tag (last ':' after last '/')
+    if ":" in ref and ref.rfind(":") > ref.rfind("/"):
+        ref, tag = ref.rsplit(":", 1)
+    parts = ref.split("/")
+    if len(parts) >= 3:
+        registry = parts[0]
+        owner = parts[1]
+        name = parts[2]
+    elif len(parts) == 2:
+        owner = parts[0]
+        name = parts[1]
+    else:
+        owner = ""
+        name = parts[0]
+    return registry, owner, name, tag
+
+
+def choose_web_image(base_image_default: str, ghcr_token: str) -> str:
     """
     Present interactive selection of tags (newest first). If no token or listing fails,
     ask user for a tag or keep default.
     """
     default_image = base_image_default
-    default_tag = default_image.split(":")[-1] if ":" in default_image else "latest"
-    tag_rows = ghcr_list_tags(owner, name, ghcr_token) if ghcr_token else []
+    registry, owner, name, default_tag = parse_image_ref(default_image)
+    if not default_tag:
+        default_tag = "latest"
+    tag_rows = ghcr_list_tags(owner, name, ghcr_token) if (ghcr_token and owner and name and registry == "ghcr.io") else []
 
     if tag_rows:
         print("\nAvailable image tags (newest first):")
@@ -885,17 +915,17 @@ def choose_web_image(base_image_default: str, owner: str, name: str, ghcr_token:
             if 1 <= idx <= len(shown):
                 picked = shown[idx-1][0]
                 ok(f"Selected tag: {picked}")
-                return f"ghcr.io/{owner}/{name}:{picked}"
+                return f"{registry}/{owner}/{name}:{picked}" if owner else f"{registry}/{name}:{picked}"
         elif sel:
             ok(f"Selected tag: {sel}")
-            return f"ghcr.io/{owner}/{name}:{sel}"
+            return f"{registry}/{owner}/{name}:{sel}" if owner else f"{registry}/{name}:{sel}"
         ok(f"Using default tag: {default_tag}")
-        return f"ghcr.io/{owner}/{name}:{default_tag}"
+        return f"{registry}/{owner}/{name}:{default_tag}" if owner else f"{registry}/{name}:{default_tag}"
     else:
         # No list (public/no token). Ask loosely.
         prompt = input(f"Enter image tag (Enter for '{default_tag}'): ").strip()
         tag = prompt or default_tag
-        return f"ghcr.io/{owner}/{name}:{tag}"
+        return f"{registry}/{owner}/{name}:{tag}" if owner else f"{registry}/{name}:{tag}"
 
 # ---------- Wait helpers ----------
 
@@ -1224,8 +1254,7 @@ def main():
                         args.ghcr_token = gh_token
                         docker_login_ghcr(gh_user, gh_token, target)
             if args.ghcr_token:
-                owner, name = GHCR_OWNER_DEFAULT, GHCR_NAME_DEFAULT
-                picked_image = choose_web_image(web_image, owner, name, args.ghcr_token.strip())
+                picked_image = choose_web_image(web_image, args.ghcr_token.strip())
             else:
                 picked_image = web_image if ":" in web_image else f"{web_image}:latest"
             ok(f"Using web image: {picked_image}")
@@ -1250,6 +1279,15 @@ def main():
     else:
         info_path = app_dir / "tools" / "license-keygen" / "info.json"
         warn(f"LICENSE_PUBLIC_KEY not found. Expected at: {info_path}")
+        # Attempt to generate keys if missing
+        node_exe = resolve_node_exe()
+        init_script = app_dir / "tools" / "license-keygen" / "init-keys.js"
+        if node_exe and init_script.exists():
+            warn("Attempting to generate license keys locally...")
+            run([node_exe, os.fspath(init_script)], check=False)
+            discovered_key = load_license_pubkey(app_dir, args.license_public_key.strip() or None)
+            if discovered_key:
+                ok(f"LICENSE_PUBLIC_KEY generated (starts with): {discovered_key[:16]}…")
 
     # Compose & env (always GENERATED)
     write_compose(dest=compose_file, root_dir=root_dir, app_dir=app_dir, app_port=args.app_port, tz=args.tz,
