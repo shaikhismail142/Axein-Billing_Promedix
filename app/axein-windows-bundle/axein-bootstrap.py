@@ -1205,6 +1205,7 @@ def main():
     ap.add_argument("--no-mailpit", action="store_true", help="Skip Mailpit (SMTP dev inbox) service.")
     ap.add_argument("--no-minio", action="store_true", help="Skip MinIO service & seeding.")
     ap.add_argument("--web-image", default=WEB_IMAGE_DEFAULT, help="Prebuilt web image (GHCR). Empty = build from source.")
+    ap.add_argument("--pick-tag", action="store_true", help="Show GHCR tag picker even if a tag is specified.")
     ap.add_argument("--build-from-source", action="store_true", help="Force build from source (ignore --web-image).")
     ap.add_argument("--no-reexec", action="store_true", help="Disable self-update/reexec from repo.")
     ap.add_argument("--ghcr-username", default="", help="GHCR username for docker login")
@@ -1218,6 +1219,7 @@ def main():
 
     print()
     print("=== AxEin Installer ===")
+    print(f"Script: {os.path.abspath(__file__)}")
     print(f"Detected host: {host_os} / {host_arch}")
     print("1) Windows\n2) mac/Linux")
     choice = input("Install target [1/2] (Enter to auto-detect): ").strip()
@@ -1286,10 +1288,15 @@ def main():
                         args.ghcr_username = gh_user
                         args.ghcr_token = gh_token
                         docker_login_ghcr(gh_user, gh_token, target)
-            if args.ghcr_token:
-                picked_image = choose_web_image(web_image, args.ghcr_token.strip())
+            # If a tag is already provided, use it directly (skip picker)
+            has_tag = (":" in web_image and web_image.rfind(":") > web_image.rfind("/"))
+            if has_tag and not args.pick_tag:
+                picked_image = web_image
             else:
-                picked_image = web_image if ":" in web_image else f"{web_image}:latest"
+                if args.ghcr_token:
+                    picked_image = choose_web_image(web_image, args.ghcr_token.strip())
+                else:
+                    picked_image = web_image if ":" in web_image else f"{web_image}:latest"
             ok(f"Using web image: {picked_image}")
         else:
             ok("No --web-image provided; will build web from source (local image).")
