@@ -16,6 +16,14 @@ function s(v: unknown) {
   return t === "" ? undefined : t;
 }
 
+function resolveOrigin(req: Request) {
+  const proto = req.headers.get("x-forwarded-proto") || "http";
+  const host = req.headers.get("x-forwarded-host") || req.headers.get("host");
+  let origin = host ? `${proto}://${host}` : new URL(req.url).origin;
+  if (origin.includes("0.0.0.0")) origin = origin.replace("0.0.0.0", "localhost");
+  return origin;
+}
+
 async function readMeta(id: number) {
   try {
     const r = await pool.query(`SELECT id, name, meta, category, created_at, updated_at FROM products WHERE id=$1`, [id]);
@@ -185,7 +193,7 @@ export async function POST(req: Request, ctx: { params: { id: string } }) {
     }
     const returnTo = s(form.get("return_to"));
     const safeReturn = returnTo && returnTo.startsWith("/") ? returnTo : "/inventory/low-stock";
-    const url = new URL(safeReturn, req.url);
+    const url = new URL(safeReturn, resolveOrigin(req));
     url.searchParams.set("updated", "1");
     url.searchParams.delete("error");
     return NextResponse.redirect(url, { status: 303 });
@@ -193,7 +201,7 @@ export async function POST(req: Request, ctx: { params: { id: string } }) {
     console.error("POST /api/products/:id failed:", err);
     const returnTo = s(form.get("return_to"));
     const safeReturn = returnTo && returnTo.startsWith("/") ? returnTo : "/inventory/low-stock";
-    const url = new URL(safeReturn, req.url);
+    const url = new URL(safeReturn, resolveOrigin(req));
     url.searchParams.set("error", "1");
     url.searchParams.delete("updated");
     return NextResponse.redirect(url, { status: 303 });
