@@ -321,6 +321,7 @@ services:
       - type: bind
         source: {p(root_dir / 'init')}
         target: /docker-entrypoint-initdb.d
+    restart: unless-stopped
 {redis_service}{minio_service}{mailpit_block}{web_block}
 """
     dest.write_text(compose, encoding="utf-8")
@@ -776,6 +777,21 @@ def preinstall_and_preflight(args, target: str, root_dir: Path):
     install_node(target)
     ensure_node_on_path()
 
+    if target == "Windows":
+        # Try to set Docker Desktop to start on login (best-effort)
+        try:
+            docker_exe = r"C:\Program Files\Docker\Docker\Docker Desktop.exe"
+            if os.path.exists(docker_exe):
+                run([
+                    "powershell","-NoProfile","-Command",
+                    "New-ItemProperty -Path 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Run' "
+                    "-Name 'Docker Desktop' -Value '\"C:\\Program Files\\Docker\\Docker\\Docker Desktop.exe\"' "
+                    "-PropertyType String -Force"
+                ], check=False)
+                ok("Docker Desktop auto-start enabled (current user).")
+        except Exception as e:
+            warn(f"Could not enable Docker auto-start: {e}")
+
     if platform.system() == "Darwin" and shutil.which("open"):
         run(["open","-g","-a","Docker"], check=False)
 
@@ -1034,13 +1050,8 @@ def add_months(d, months: int):
     day = min(d.day, calendar.monthrange(y, m)[1])
     return datetime(y, m, day).date()
 
-def compute_expiry(start_date, plan: str):
-    plan = plan.lower()
-    if plan == "monthly":
-        return add_months(start_date, 1)
-    if plan == "quarterly":
-        return add_months(start_date, 3)
-    return add_months(start_date, 12)  # yearly default
+def compute_expiry(start_date, months: int):
+    return add_months(start_date, months)
 
 def prompt_license_details():
     print("\n--- License Setup ---")
@@ -1052,10 +1063,14 @@ def prompt_license_details():
     while not email or not re.match(r"^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$", email):
         email = input("  Please enter a valid email: ").strip()
 
-    plan = (input("Plan [Monthly/Quarterly/Yearly] (default: Yearly): ").strip() or "Yearly").title()
-    if plan not in ("Monthly", "Quarterly", "Yearly"):
-        warn("Invalid plan. Using Yearly.")
-        plan = "Yearly"
+    term_raw = (input("License term in months [6/12] (default: 12): ").strip() or "12")
+    try:
+        term_months = int(term_raw)
+    except Exception:
+        term_months = 12
+    if term_months not in (6, 12):
+        warn("Invalid term. Using 12 months.")
+        term_months = 12
 
     today_str = datetime.now().strftime("%Y-%m-%d")
     start_str = input(f"Start date (YYYY-MM-DD) (default: {today_str}): ").strip() or today_str
@@ -1066,7 +1081,7 @@ def prompt_license_details():
         except Exception:
             start_str = input("  Please use YYYY-MM-DD: ").strip() or today_str
 
-    computed_end = compute_expiry(start_date, plan.lower())
+    computed_end = compute_expiry(start_date, term_months)
     end_str = input(f"End date (YYYY-MM-DD) (default: {computed_end}): ").strip() or str(computed_end)
     while True:
         try:
@@ -1082,7 +1097,7 @@ def prompt_license_details():
     return {
         "company": company,
         "email": email,
-        "plan": plan,
+        "term_months": term_months,
         "start_date": start_date,
         "end_date": end_date,
         "phone": phone,
@@ -1423,6 +1438,10 @@ def main():
                 expires_iso=expires_iso,
             )
             if payload:
+                print("\n--- License Payload (copy/paste) ---")
+                print(json.dumps(payload, indent=2))
+                print("------------------------------------\n")
+
                 # Apply license in app
                 apply_license(args.app_port, payload)
 
