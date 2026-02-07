@@ -1256,6 +1256,21 @@ def apply_business_settings(app_port: int, company: str, email: str, phone: str,
         warn(f"Business settings update failed: {e}")
     return False
 
+def ensure_license_keys(app_src_dir: Path) -> bool:
+    """
+    Ensure ed25519 private key exists (for signing). If missing, attempt to generate with init-keys.js.
+    Returns True if private key exists after this step.
+    """
+    key_path = app_src_dir / "tools" / "license-keygen" / "ed25519-private.pem"
+    if key_path.exists():
+        return True
+    node_exe = resolve_node_exe()
+    init_script = app_src_dir / "tools" / "license-keygen" / "init-keys.js"
+    if node_exe and init_script.exists():
+        warn("License private key missing. Generating new keypair locally…")
+        run([node_exe, os.fspath(init_script)], check=False)
+    return key_path.exists()
+
 # ---------- Main ----------
 
 def main():
@@ -1411,6 +1426,13 @@ def main():
     # Ask for license details early and generate payload for copy/paste
     license_payload = None
     try:
+        # Ensure signing key exists (generates local keypair if missing)
+        _ = ensure_license_keys(app_src_dir)
+        # Reload public key if it was generated
+        discovered_key = load_license_pubkey(app_src_dir, args.license_public_key.strip() or None)
+        if discovered_key:
+            ok(f"LICENSE_PUBLIC_KEY detected (starts with): {discovered_key[:16]}…")
+
         gen_now = input("Generate license payload now? [Y/n]: ").strip().lower()
         if gen_now in ("", "y", "yes"):
             details = prompt_license_details()
