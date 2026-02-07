@@ -501,9 +501,7 @@ def tables_missing(compose_file: Path, db_name: str, db_user: str, expected: lis
     return missing
 
 
-SOFT_FAIL_MIGRATIONS = {
-    "0114_inventory_stock_ledger.sql",
-}
+SOFT_FAIL_MIGRATIONS: set[str] = set()
 
 def migration_candidates(app_dir: Path, mode: str) -> list[Path]:
     mig_dir = app_dir / "db" / "migrations"
