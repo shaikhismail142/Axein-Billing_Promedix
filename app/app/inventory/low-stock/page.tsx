@@ -10,11 +10,14 @@ function inr(n: number) {
   return `INR (Rs/-) ${Number(n || 0).toFixed(2)}`;
 }
 
-export default async function InventoryPage({ searchParams }: { searchParams: { q?: string; page?: string } }) {
+export default async function InventoryPage({ searchParams }: { searchParams: { q?: string; page?: string; updated?: string; error?: string } }) {
   const q = (searchParams?.q || "").trim();
   const page = Math.max(1, Number(searchParams?.page || 1));
+  const updated = (searchParams?.updated || "").trim();
+  const error = (searchParams?.error || "").trim();
   const perPage = 20;
   const offset = (page - 1) * perPage;
+  const returnTo = `/inventory/low-stock?${new URLSearchParams({ q, page: String(page) }).toString()}`;
 
   const where: string[] = [];
   const params: any[] = [];
@@ -68,6 +71,15 @@ export default async function InventoryPage({ searchParams }: { searchParams: { 
           </div>
         </form>
 
+        {(updated || error) && (
+          <div
+            className="mt-3 rounded-xl border px-3 py-2 text-sm"
+            style={{ background: error ? "rgba(244,63,94,0.08)" : "rgba(16,185,129,0.08)" }}
+          >
+            {error ? "Could not save changes. Please try again." : "Changes saved successfully."}
+          </div>
+        )}
+
         <div className="table-wrap" style={{ marginTop: 12 }}>
           <table className="table">
             <thead>
@@ -86,7 +98,7 @@ export default async function InventoryPage({ searchParams }: { searchParams: { 
                   <td style={{ maxWidth: 420, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{p.name}</td>
                   <td style={{ textAlign: 'right' }}>{inr(p.price)}</td>
                   <td style={{ textAlign: 'right' }}>
-                    <InlineStockLowEdit id={p.id} stock={p.stock} low={p.low} />
+                    <InlineStockLowEdit id={p.id} stock={p.stock} low={p.low} returnTo={returnTo} />
                   </td>
                   <td style={{ textAlign: 'right' }} />
                 </tr>
@@ -127,7 +139,7 @@ export default async function InventoryPage({ searchParams }: { searchParams: { 
   );
 }
 
-function InlineStockLowEdit({ id, stock, low }: { id: number; stock: number; low: number }) {
+function InlineStockLowEdit({ id, stock, low, returnTo }: { id: number; stock: number; low: number; returnTo: string }) {
   return (
     <form
       action={`/api/products/${id}`}
@@ -135,7 +147,7 @@ function InlineStockLowEdit({ id, stock, low }: { id: number; stock: number; low
       style={{ display: 'inline-flex', gap: 6, justifyContent: 'flex-end', width: '100%' }}
     >
       <input type="hidden" name="_method" value="PATCH" />
-      <input type="hidden" name="return_to" value="/inventory/low-stock" />
+      <input type="hidden" name="return_to" value={returnTo} />
       <input
         type="number"
         name="stock_qty"

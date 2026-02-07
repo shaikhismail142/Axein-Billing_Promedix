@@ -174,15 +174,28 @@ export async function POST(req: Request, ctx: { params: { id: string } }) {
   const expDate = s(form.get("exp_date") ?? form.get("expiry_date"));
   if (expDate !== undefined) patch.exp_date = expDate;
 
-  const updated = await writeMeta(id, patch, { name: s(form.get("name")) });
-  if (!updated) return NextResponse.json({ ok: false, error: "not found" }, { status: 404 });
+  try {
+    const updated = await writeMeta(id, patch, { name: s(form.get("name")) });
+    if (!updated) return NextResponse.json({ ok: false, error: "not found" }, { status: 404 });
 
-  if (category !== undefined) {
-    try {
-      await pool.query(`UPDATE products SET category=$2 WHERE id=$1`, [id, category]);
-    } catch {}
+    if (category !== undefined) {
+      try {
+        await pool.query(`UPDATE products SET category=$2 WHERE id=$1`, [id, category]);
+      } catch {}
+    }
+    const returnTo = s(form.get("return_to"));
+    const safeReturn = returnTo && returnTo.startsWith("/") ? returnTo : "/inventory/low-stock";
+    const url = new URL(safeReturn, req.url);
+    url.searchParams.set("updated", "1");
+    url.searchParams.delete("error");
+    return NextResponse.redirect(url, { status: 303 });
+  } catch (err) {
+    console.error("POST /api/products/:id failed:", err);
+    const returnTo = s(form.get("return_to"));
+    const safeReturn = returnTo && returnTo.startsWith("/") ? returnTo : "/inventory/low-stock";
+    const url = new URL(safeReturn, req.url);
+    url.searchParams.set("error", "1");
+    url.searchParams.delete("updated");
+    return NextResponse.redirect(url, { status: 303 });
   }
-  const returnTo = s(form.get("return_to"));
-  const safeReturn = returnTo && returnTo.startsWith("/") ? returnTo : "/inventory/low-stock";
-  return NextResponse.redirect(new URL(safeReturn, req.url), { status: 303 });
 }
