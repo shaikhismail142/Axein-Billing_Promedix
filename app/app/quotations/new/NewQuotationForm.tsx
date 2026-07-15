@@ -6,9 +6,11 @@ import * as React from 'react';
 type Product = {
   id: number;
   name: string;
+  price?: number | string | null;
   meta?: {
     sku?: string;
     selling_price?: number;
+    price?: number;
     hsn_code?: string;
     unit?: string;
   };
@@ -38,9 +40,40 @@ type InitialQuotation = {
   meta?: { notes?: string; terms?: string } | null;
 };
 
-function dateInput(v?: string | null) {
+function dateInput(v?: string | Date | null) {
   if (!v) return '';
-  return String(v).slice(0, 10);
+  if (v instanceof Date && !Number.isNaN(v.getTime())) return v.toISOString().slice(0, 10);
+  const s = String(v).trim();
+  if (/^\d{4}-\d{2}-\d{2}/.test(s)) return s.slice(0, 10);
+  return '';
+}
+
+const inr = new Intl.NumberFormat('en-IN', {
+  style: 'currency',
+  currency: 'INR',
+  maximumFractionDigits: 2,
+});
+
+const toNum = (v: unknown, d = 0) => (Number.isFinite(Number(v)) ? Number(v) : d);
+const round2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
+
+function calcLine(it: Item) {
+  const qty = Math.max(0, toNum(it.qty));
+  const price = Math.max(0, toNum(it.price));
+  const taxRate = Math.max(0, toNum(it.tax));
+  const discountRaw = Math.max(0, toNum(it.discount));
+  const subtotal = qty * price;
+  const discountAmount =
+    discountRaw > 0 ? (discountRaw <= 100 ? subtotal * (discountRaw / 100) : discountRaw) : 0;
+  const taxable = Math.max(0, subtotal - discountAmount);
+  const taxAmount = taxable * (taxRate / 100);
+  return {
+    subtotal: round2(subtotal),
+    discountAmount: round2(Math.min(discountAmount, subtotal)),
+    taxable: round2(taxable),
+    taxAmount: round2(taxAmount),
+    total: round2(taxable + taxAmount),
+  };
 }
 
 export default function NewQuotationForm({
@@ -77,18 +110,35 @@ export default function NewQuotationForm({
   const [error, setError] = React.useState<string | null>(null);
   const [savedMessage, setSavedMessage] = React.useState<string | null>(null);
 
+  const totals = React.useMemo(
+    () =>
+      items.reduce(
+        (acc, it) => {
+          const line = calcLine(it);
+          acc.subtotal += line.subtotal;
+          acc.discount += line.discountAmount;
+          acc.taxable += line.taxable;
+          acc.tax += line.taxAmount;
+          acc.grand += line.total;
+          return acc;
+        },
+        { subtotal: 0, discount: 0, taxable: 0, tax: 0, grand: 0 }
+      ),
+    [items]
+  );
+
   const onSelectProduct = (row: number, productId: number) => {
     const p = products.find((x) => x.id === Number(productId));
     setItems((prev) => {
       const next = [...prev];
-      const price = Number(p?.meta?.selling_price ?? 0);
+      const price = Number(p?.meta?.selling_price ?? p?.meta?.price ?? p?.price ?? 0);
       next[row] = {
         ...next[row],
         product_id: Number(productId) || undefined,
-        description: next[row].description || p?.name || '',
+        description: p?.name || next[row].description || '',
         price,
         batch_no: p?.batch_no ?? next[row].batch_no ?? '',
-        exp_date: p?.exp_date ?? next[row].exp_date ?? '',
+        exp_date: dateInput(p?.exp_date ?? next[row].exp_date ?? ''),
       };
       return next;
     });
@@ -165,8 +215,11 @@ export default function NewQuotationForm({
         <div>
           <h1 className="text-2xl font-semibold">{isEdit ? 'Edit Quotation' : 'New Quotation'}</h1>
           {initialQuotation?.quotation_number && (
-            <p className="muted text-sm mt-1">{initialQuotation.quotation_number}</p>
+          <p className="muted text-sm mt-1">{initialQuotation.quotation_number}</p>
           )}
+          <p className="muted text-sm mt-2">
+            Discount rule: values from 0–100 are treated as percent; values above 100 are treated as INR.
+          </p>
         </div>
         {savedId && (
           <button type="button" onClick={openQuotation} className="rounded-lg border px-3 py-2 text-sm">
@@ -200,8 +253,8 @@ export default function NewQuotationForm({
 
       {/* Items */}
       {items.map((it, i) => (
+        <React.Fragment key={i}>
         <div
-          key={i}
           className="grid grid-cols-12 gap-3 rounded-xl border p-4 bg-white/60 backdrop-blur"
         >
           {/* Product */}
@@ -247,9 +300,10 @@ export default function NewQuotationForm({
 
           {/* Price */}
           <div className="col-span-2">
-            <label className="block text-sm font-medium mb-1">Price</label>
+            <label className="block text-sm font-medium mb-1">Price (₹)</label>
             <input
               type="number"
+              min="0"
               step="0.01"
               className="w-full rounded-md border px-3 py-2 text-right"
               value={it.price}
@@ -262,6 +316,7 @@ export default function NewQuotationForm({
             <label className="block text-sm font-medium mb-1">Tax %</label>
             <input
               type="number"
+              min="0"
               step="0.01"
               className="w-full rounded-md border px-3 py-2 text-right"
               value={it.tax}
@@ -271,15 +326,18 @@ export default function NewQuotationForm({
 
           {/* Discount */}
           <div className="col-span-1">
-            <label className="block text-sm font-medium mb-1">Discount</label>
+            <label className="block text-sm font-medium mb-1">Disc</label>
             <input
               type="number"
+              min="0"
               step="0.01"
               className="w-full rounded-md border px-3 py-2 text-right"
               value={it.discount}
               onChange={(e) => onChange(i, 'discount', e.target.value)}
-              placeholder="0"
+              placeholder="% / ₹"
+              title="0-100 is treated as percentage. Above 100 is treated as INR."
             />
+            <p className="muted mt-1 text-[11px]">0–100 = %, &gt;100 = ₹</p>
           </div>
 
           {/* Extra item details */}
@@ -318,7 +376,14 @@ export default function NewQuotationForm({
             </div>
           </div>
           {items.length > 1 && (
-            <div className="col-span-12 flex justify-end">
+            <div className="col-span-12 flex flex-wrap items-center justify-between gap-3 border-t pt-3">
+              <div className="text-sm">
+                <span className="muted">Line total: </span>
+                <span className="font-semibold">{inr.format(calcLine(it).total)}</span>
+                <span className="muted ml-2">
+                  Tax {inr.format(calcLine(it).taxAmount)} • Discount {inr.format(calcLine(it).discountAmount)}
+                </span>
+              </div>
               <button
                 type="button"
                 onClick={() => removeRow(i)}
@@ -328,7 +393,14 @@ export default function NewQuotationForm({
               </button>
             </div>
           )}
+          {items.length <= 1 && (
+            <div className="col-span-12 flex justify-end border-t pt-3 text-sm">
+              <span className="muted mr-2">Line total:</span>
+              <span className="font-semibold">{inr.format(calcLine(it).total)}</span>
+            </div>
+          )}
         </div>
+        </React.Fragment>
       ))}
 
       <button
@@ -338,6 +410,39 @@ export default function NewQuotationForm({
       >
         + Add item
       </button>
+
+      <div className="grid grid-cols-12 gap-4">
+        <div className="col-span-12 md:col-span-7 rounded-xl border p-4">
+          <h2 className="text-base font-semibold">Quotation total</h2>
+          <p className="muted mt-1 text-sm">
+            This updates instantly as you change quantity, price, tax, or discount.
+          </p>
+        </div>
+        <div className="col-span-12 md:col-span-5 rounded-xl border p-4">
+          <div className="space-y-2 text-sm">
+            <div className="flex justify-between gap-4">
+              <span className="muted">Subtotal</span>
+              <span>{inr.format(round2(totals.subtotal))}</span>
+            </div>
+            <div className="flex justify-between gap-4">
+              <span className="muted">Discount</span>
+              <span>-{inr.format(round2(totals.discount))}</span>
+            </div>
+            <div className="flex justify-between gap-4">
+              <span className="muted">Taxable amount</span>
+              <span>{inr.format(round2(totals.taxable))}</span>
+            </div>
+            <div className="flex justify-between gap-4">
+              <span className="muted">Tax</span>
+              <span>{inr.format(round2(totals.tax))}</span>
+            </div>
+            <div className="mt-3 flex justify-between gap-4 border-t pt-3 text-lg font-semibold">
+              <span>Grand total</span>
+              <span>{inr.format(round2(totals.grand))}</span>
+            </div>
+          </div>
+        </div>
+      </div>
 
       {/* Notes / Terms / Valid Until */}
       <div className="grid grid-cols-12 gap-3">

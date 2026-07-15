@@ -7,6 +7,13 @@ export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
 const toNum = (v: any, d = 0) => (Number.isFinite(Number(v)) ? Number(v) : d);
+const dateOnly = (v: any) => {
+  if (!v) return "";
+  if (v instanceof Date && !Number.isNaN(v.getTime())) return v.toISOString().slice(0, 10);
+  const s = String(v).trim();
+  if (/^\d{4}-\d{2}-\d{2}/.test(s)) return s.slice(0, 10);
+  return "";
+};
 
 export default async function Page({ params }: { params: { id: string } }) {
   const id = Number(params.id);
@@ -16,7 +23,7 @@ export default async function Page({ params }: { params: { id: string } }) {
     `select q.id,
             q.quotation_number,
             q.customer_id,
-            q.valid_until,
+            to_char(q.valid_until, 'YYYY-MM-DD') as valid_until,
             coalesce(q.meta, '{}'::jsonb) as meta,
             c.name as customer_name
        from quotations q
@@ -29,7 +36,8 @@ export default async function Page({ params }: { params: { id: string } }) {
   if (!qRs.rows.length) notFound();
 
   const itemsRs = await pool.query(
-    `select product_id, description, qty, price, tax, discount, batch_no, exp_date
+    `select product_id, description, qty, price, tax, discount, batch_no,
+            to_char(exp_date, 'YYYY-MM-DD') as exp_date
        from quotation_items
       where quotation_id = $1
       order by id asc`,
@@ -66,7 +74,7 @@ export default async function Page({ params }: { params: { id: string } }) {
     tax: toNum(it.tax, 0),
     discount: toNum(it.discount, 0),
     batch_no: it.batch_no ?? "",
-    exp_date: it.exp_date ? String(it.exp_date).slice(0, 10) : "",
+    exp_date: dateOnly(it.exp_date),
   }));
 
   const quotation = qRs.rows[0];
@@ -85,7 +93,7 @@ export default async function Page({ params }: { params: { id: string } }) {
           quotation_number: quotation.quotation_number ?? null,
           customer_id: quotation.customer_id ? Number(quotation.customer_id) : null,
           customer_name: quotation.customer_name ?? null,
-          valid_until: quotation.valid_until ? String(quotation.valid_until).slice(0, 10) : null,
+          valid_until: dateOnly(quotation.valid_until) || null,
           meta: quotation.meta ?? {},
         }}
         initialItems={initialItems}

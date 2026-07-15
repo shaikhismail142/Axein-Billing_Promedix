@@ -22,6 +22,12 @@ const cleanText = (v: any) => {
   const t = String(v).trim();
   return t === "" ? null : t;
 };
+const cleanDate = (v: any) => {
+  const t = cleanText(v);
+  if (!t) return null;
+  if (/^\d{4}-\d{2}-\d{2}/.test(t)) return t.slice(0, 10);
+  return null;
+};
 
 function isValidItems(items: Item[]) {
   if (!Array.isArray(items) || items.length === 0) return false;
@@ -136,7 +142,7 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
               meta = $4::jsonb,
               updated_at = now()
         where id = $1`,
-      [id, customerId, valid_until || null, JSON.stringify(meta)]
+      [id, customerId, cleanDate(valid_until), JSON.stringify(meta)]
     );
 
     await client.query(`delete from quotation_items where quotation_id = $1`, [id]);
@@ -165,7 +171,7 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
           discount,
           Number(total.toFixed(2)),
           cleanText(raw.batch_no),
-          cleanText(raw.exp_date),
+          cleanDate(raw.exp_date),
         ]
       );
     }

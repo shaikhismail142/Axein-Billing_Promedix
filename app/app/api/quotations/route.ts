@@ -113,6 +113,17 @@ type Item = {
 
 // ---------- Helpers ----------
 const toNum = (v: any, d = 0) => (Number.isFinite(Number(v)) ? Number(v) : d);
+const cleanText = (v: any) => {
+  if (v === null || v === undefined) return null;
+  const t = String(v).trim();
+  return t === '' ? null : t;
+};
+const cleanDate = (v: any) => {
+  const t = cleanText(v);
+  if (!t) return null;
+  if (/^\d{4}-\d{2}-\d{2}/.test(t)) return t.slice(0, 10);
+  return null;
+};
 
 function isValidItems(items: Item[]) {
   if (!Array.isArray(items) || items.length === 0) return false;
@@ -214,26 +225,35 @@ export async function POST(req: NextRequest) {
       `insert into quotations (customer_id, quotation_number, quotation_date, valid_until, meta)
        values ($1, $2, now(), $3, $4)
        returning id`,
-      [customerId ?? null, quotation_number, valid_until, meta]
+      [customerId ?? null, quotation_number, cleanDate(valid_until), meta]
     );
     const quotation_id: number = qRes.rows[0].id;
 
     for (const itRaw of items as Item[]) {
+      const qty = toNum(itRaw.qty, 0);
+      const price = toNum(itRaw.price, 0);
+      const tax = toNum(itRaw.tax, 0);
+      const discount = toNum(itRaw.discount, 0);
+      const subtotal = qty * price;
+      const discountAbs = discount > 0 ? (discount <= 100 ? subtotal * (discount / 100) : discount) : 0;
+      const taxable = Math.max(0, subtotal - discountAbs);
+      const total = taxable + taxable * (tax / 100);
       const it = {
         product_id: itRaw.product_id ?? null,
         description: itRaw.description ?? '',
-        qty: toNum(itRaw.qty, 0),
-        price: toNum(itRaw.price, 0),
-        tax: toNum(itRaw.tax, 0),
-        discount: toNum(itRaw.discount, 0),
-        batch_no: typeof (itRaw as any).batch_no === 'string' ? String((itRaw as any).batch_no).trim() || null : null,
-        exp_date: typeof (itRaw as any).exp_date === 'string' ? String((itRaw as any).exp_date).trim() || null : null,
+        qty,
+        price,
+        tax,
+        discount,
+        total: Number(total.toFixed(2)),
+        batch_no: cleanText((itRaw as any).batch_no),
+        exp_date: cleanDate((itRaw as any).exp_date),
       };
 
       await client.query(
-        `insert into quotation_items (quotation_id, product_id, description, qty, price, tax, discount, batch_no, exp_date)
-         values ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
-        [quotation_id, it.product_id, it.description, it.qty, it.price, it.tax, it.discount, it.batch_no, it.exp_date]
+        `insert into quotation_items (quotation_id, product_id, description, qty, price, tax, discount, total, batch_no, exp_date)
+         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+        [quotation_id, it.product_id, it.description, it.qty, it.price, it.tax, it.discount, it.total, it.batch_no, it.exp_date]
       );
     }
 
