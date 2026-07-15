@@ -122,6 +122,9 @@ export default async function Page({ searchParams }: { searchParams: { q?: strin
                       <Link href={`/quotations/${r.id}`} className="glass-btn px-2 py-1">
                         View
                       </Link>
+                      <Link href={`/quotations/${r.id}/edit`} className="glass-btn px-2 py-1">
+                        Edit
+                      </Link>
                       <Link href={`/api/quotations/${r.id}/pdf`} className="glass-btn px-2 py-1">
                         PDF
                       </Link>

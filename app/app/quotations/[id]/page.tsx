@@ -150,6 +150,12 @@ export default async function Page({ params }: { params: { id: string } }) {
 
         <div className="flex flex-wrap gap-2 no-print">
           <Link
+            href={`/quotations/${quotation.id}/edit`}
+            className="glass-btn text-sm px-3 py-2 rounded-2xl"
+          >
+            Edit
+          </Link>
+          <Link
             href={`/api/quotations/${quotation.id}/pdf`}
             className="btn-primary text-sm px-3 py-2 rounded-2xl"
           >

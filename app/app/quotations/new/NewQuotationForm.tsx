@@ -29,25 +29,53 @@ type Item = {
   exp_date?: string;
 };
 
-export default function NewQuotationForm({ products }: { products: Product[] }) {
+type InitialQuotation = {
+  id: number;
+  quotation_number?: string | null;
+  customer_id?: number | null;
+  customer_name?: string | null;
+  valid_until?: string | null;
+  meta?: { notes?: string; terms?: string } | null;
+};
+
+function dateInput(v?: string | null) {
+  if (!v) return '';
+  return String(v).slice(0, 10);
+}
+
+export default function NewQuotationForm({
+  products,
+  initialQuotation,
+  initialItems,
+}: {
+  products: Product[];
+  initialQuotation?: InitialQuotation;
+  initialItems?: Item[];
+}) {
+  const isEdit = Boolean(initialQuotation?.id);
   // Items
-  const [items, setItems] = React.useState<Item[]>([
-    { product_id: undefined, description: '', qty: 1, price: 0, tax: 0, discount: 0, batch_no: '', exp_date: '' },
-  ]);
+  const [items, setItems] = React.useState<Item[]>(
+    initialItems?.length
+      ? initialItems
+      : [{ product_id: undefined, description: '', qty: 1, price: 0, tax: 0, discount: 0, batch_no: '', exp_date: '' }]
+  );
 
   // Customer fields
-  const [customerName, setCustomerName] = React.useState<string>(''); // free text
-  const [customerId, setCustomerId] = React.useState<string>('');     // keep as string, parse on save
+  const [customerName, setCustomerName] = React.useState<string>(initialQuotation?.customer_name ?? ''); // free text
+  const [customerId, setCustomerId] = React.useState<string>(
+    initialQuotation?.customer_id ? String(initialQuotation.customer_id) : ''
+  );     // keep as string, parse on save
 
   // Misc fields
-  const [notes, setNotes] = React.useState('');
-  const [terms, setTerms] = React.useState('');
-  const [validUntil, setValidUntil] = React.useState<string>('');
+  const [notes, setNotes] = React.useState(initialQuotation?.meta?.notes ?? '');
+  const [terms, setTerms] = React.useState(initialQuotation?.meta?.terms ?? '');
+  const [validUntil, setValidUntil] = React.useState<string>(dateInput(initialQuotation?.valid_until));
 
   // Save state
   const [saving, setSaving] = React.useState(false);
-  const [savedId, setSavedId] = React.useState<number | null>(null);
+  const [savedId, setSavedId] = React.useState<number | null>(initialQuotation?.id ?? null);
   const [error, setError] = React.useState<string | null>(null);
+  const [savedMessage, setSavedMessage] = React.useState<string | null>(null);
 
   const onSelectProduct = (row: number, productId: number) => {
     const p = products.find((x) => x.id === Number(productId));
@@ -81,9 +109,13 @@ export default function NewQuotationForm({ products }: { products: Product[] }) 
       { product_id: undefined, description: '', qty: 1, price: 0, tax: 0, discount: 0, batch_no: '', exp_date: '' },
     ]);
 
+  const removeRow = (row: number) =>
+    setItems((prev) => (prev.length <= 1 ? prev : prev.filter((_, i) => i !== row)));
+
   const saveQuotation = async () => {
     setSaving(true);
     setError(null);
+    setSavedMessage(null);
     try {
       // Parse optional numeric ID safely (avoid NaN)
       const parsedId =
@@ -93,8 +125,9 @@ export default function NewQuotationForm({ products }: { products: Product[] }) 
           ? Number(customerId)
           : null;
 
-      const res = await fetch('/api/quotations', {
-        method: 'POST',
+      const endpoint = isEdit ? `/api/quotations/${initialQuotation?.id}` : '/api/quotations';
+      const res = await fetch(endpoint, {
+        method: isEdit ? 'PATCH' : 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           customer_id: parsedId,                    // may be null
@@ -107,22 +140,40 @@ export default function NewQuotationForm({ products }: { products: Product[] }) 
       });
       if (!res.ok) throw new Error(await res.text());
       const data = await res.json();
-      setSavedId(data.id);
+      const id = Number(data?.data?.id ?? data?.id ?? initialQuotation?.id);
+      if (Number.isFinite(id)) setSavedId(id);
+      setSavedMessage(isEdit ? 'Quotation updated successfully.' : 'Quotation saved successfully.');
     } catch (e) {
       console.error(e);
-      setError('Failed to save quotation');
+      setError(isEdit ? 'Failed to update quotation' : 'Failed to save quotation');
     } finally {
       setSaving(false);
     }
   };
 
   const openPdf = () => {
-    if (savedId) window.open(`/quotations/${savedId}/pdf`, '_blank', 'noopener');
+    if (savedId) window.open(`/api/quotations/${savedId}/pdf`, '_blank', 'noopener');
+  };
+
+  const openQuotation = () => {
+    if (savedId) window.location.href = `/quotations/${savedId}`;
   };
 
   return (
     <div className="space-y-4">
-      <h1 className="text-2xl font-semibold">New Quotation</h1>
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <h1 className="text-2xl font-semibold">{isEdit ? 'Edit Quotation' : 'New Quotation'}</h1>
+          {initialQuotation?.quotation_number && (
+            <p className="muted text-sm mt-1">{initialQuotation.quotation_number}</p>
+          )}
+        </div>
+        {savedId && (
+          <button type="button" onClick={openQuotation} className="rounded-lg border px-3 py-2 text-sm">
+            View
+          </button>
+        )}
+      </div>
 
       {/* Customer fields */}
       <div className="grid grid-cols-12 gap-3">
@@ -266,6 +317,17 @@ export default function NewQuotationForm({ products }: { products: Product[] }) 
               />
             </div>
           </div>
+          {items.length > 1 && (
+            <div className="col-span-12 flex justify-end">
+              <button
+                type="button"
+                onClick={() => removeRow(i)}
+                className="rounded-lg border px-3 py-2 text-xs"
+              >
+                Remove item
+              </button>
+            </div>
+          )}
         </div>
       ))}
 
@@ -310,6 +372,7 @@ export default function NewQuotationForm({ products }: { products: Product[] }) 
 
       {/* Actions */}
       {error && <p className="text-red-600 text-sm">{error}</p>}
+      {savedMessage && <p className="text-emerald-600 text-sm">{savedMessage}</p>}
       <div className="flex gap-3">
         <button
           type="button"
@@ -317,7 +380,7 @@ export default function NewQuotationForm({ products }: { products: Product[] }) 
           disabled={saving || items.length === 0}
           className="rounded-lg bg-black text-white px-4 py-2 disabled:opacity-50"
         >
-          {saving ? 'Saving…' : 'Save Quotation'}
+          {saving ? 'Saving…' : isEdit ? 'Update Quotation' : 'Save Quotation'}
         </button>
         <button
           type="button"
