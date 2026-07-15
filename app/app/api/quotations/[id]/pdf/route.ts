@@ -23,10 +23,6 @@ type QItem = {
   price: number | null;
   tax: number | null;       // GST %
   discount: number | null;  // % or absolute (>100)
-  category?: string | null;
-  hsn_code?: string | null;
-  batch_no?: string | null;
-  exp_date?: string | null;
 };
 
 type BusinessProfile = {
@@ -133,12 +129,8 @@ export async function GET(_req: Request, { params }: { params: { id: string } })
 
   // Items
   const itRs = await pool.query(
-    `select qi.description, qi.qty, qi.price, qi.tax, qi.discount, qi.batch_no,
-            to_char(qi.exp_date, 'YYYY-MM-DD') as exp_date,
-            COALESCE(p.category, p.meta->>'category') AS category,
-            COALESCE(p.hsn_code, p.hsn, p.meta->>'hsn_code') AS hsn_code
+    `select qi.description, qi.qty, qi.price, qi.tax, qi.discount
        from quotation_items qi
-       left join products p on p.id = qi.product_id
       where qi.quotation_id=$1
       order by qi.id asc`,
     [id]
@@ -155,10 +147,6 @@ export async function GET(_req: Request, { params }: { params: { id: string } })
   // ---------- compute rows & totals ----------
   type Row = {
     desc: string;
-    category: string;
-    hsn: string;
-    batch: string;
-    exp: string;
     qty: number;
     price: number;
     discPct: number;
@@ -192,10 +180,6 @@ export async function GET(_req: Request, { params }: { params: { id: string } })
 
     return {
       desc: (it.description ?? "").toString(),
-      category: (it.category ?? "").toString(),
-      hsn: (it.hsn_code ?? "").toString(),
-      batch: (it.batch_no ?? "").toString(),
-      exp: it.exp_date ? String(it.exp_date) : "",
       qty: round2(qty),
       price: round2(price),
       discPct: round2(discPct),
@@ -234,13 +218,6 @@ export async function GET(_req: Request, { params }: { params: { id: string } })
   const grid = "#d9dee7";
   const soft = "#f5f7fb";
   const headerFill = "#eef3fb";
-
-  const shortDate = (v?: string | null) => {
-    if (!v) return "-";
-    const d = new Date(v);
-    if (Number.isNaN(d.getTime())) return "-";
-    return d.toLocaleDateString("en-IN", { day: "2-digit", month: "2-digit", year: "2-digit" });
-  };
 
   const safeText = (v: any, fallback = "-") => {
     const t = v === null || v === undefined ? "" : String(v).trim();
@@ -302,16 +279,12 @@ export async function GET(_req: Request, { params }: { params: { id: string } })
   };
 
   const cols = [
-    { key: "desc", label: "Description", w: 166, align: "left" as const },
-    { key: "cat", label: "Cat", w: 48, align: "left" as const },
-    { key: "hsn", label: "HSN", w: 38, align: "left" as const },
-    { key: "lot", label: "Lot", w: 36, align: "left" as const },
-    { key: "exp", label: "Exp", w: 46, align: "left" as const },
-    { key: "qty", label: "Qty", w: 30, align: "right" as const },
-    { key: "rate", label: "Rate", w: 47, align: "right" as const },
-    { key: "disc", label: "Disc", w: 34, align: "right" as const },
-    { key: "gst", label: "GST", w: 32, align: "right" as const },
-    { key: "amt", label: "Amount", w: 62, align: "right" as const },
+    { key: "desc", label: "Description", w: 260, align: "left" as const },
+    { key: "qty", label: "Qty", w: 45, align: "right" as const },
+    { key: "rate", label: "Rate", w: 62, align: "right" as const },
+    { key: "disc", label: "Disc", w: 50, align: "right" as const },
+    { key: "gst", label: "GST", w: 50, align: "right" as const },
+    { key: "amt", label: "Amount", w: 72, align: "right" as const },
   ];
   const tableX = margin;
   const tableW = cols.reduce((sum, c) => sum + c.w, 0);
@@ -354,10 +327,6 @@ export async function GET(_req: Request, { params }: { params: { id: string } })
     doc.font(baseFont).fontSize(tableFontSize).fillColor(ink);
     const cells = [
       safeText(r.desc),
-      safeText(r.category),
-      safeText(r.hsn),
-      safeText(r.batch),
-      r.exp ? shortDate(r.exp) : "-",
       r.qty.toFixed(2),
       fmtAmt(r.price),
       r.discPct.toFixed(2),

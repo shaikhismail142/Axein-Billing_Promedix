@@ -17,10 +17,6 @@ type Item = {
   price: number;
   tax: number;       // %
   discount: number;  // % or absolute (>100)
-  category?: string | null;
-  hsn_code?: string | null;
-  batch_no?: string | null;
-  exp_date?: string | null;
 };
 
 type Quotation = {
@@ -78,12 +74,8 @@ export default async function Page({ params }: { params: { id: string } }) {
     null;
 
   const itemsRs = await pool.query(
-    `select qi.id, qi.product_id, qi.description, qi.qty, qi.price, qi.tax, qi.discount,
-            qi.batch_no, qi.exp_date,
-            COALESCE(p.category, p.meta->>'category') AS category,
-            COALESCE(p.hsn_code, p.hsn, p.meta->>'hsn_code') AS hsn_code
+    `select qi.id, qi.product_id, qi.description, qi.qty, qi.price, qi.tax, qi.discount
        from quotation_items qi
-       left join products p on p.id = qi.product_id
       where qi.quotation_id = $1
       order by qi.id asc`,
     [id]
@@ -117,10 +109,6 @@ export default async function Page({ params }: { params: { id: string } }) {
       discPct: sub > 0 ? (discRaw <= 100 ? discRaw : (discAbs / sub) * 100) : 0,
       taxPct,
       lineTotal,
-      category: it.category ?? "",
-      hsn_code: it.hsn_code ?? "",
-      batch_no: it.batch_no ?? "",
-      exp_date: it.exp_date ?? "",
     };
   });
 
@@ -201,10 +189,6 @@ export default async function Page({ params }: { params: { id: string } }) {
             <thead>
               <tr className="text-left">
                 <th>Item / Description</th>
-                <th className="w-28">Category</th>
-                <th className="w-28">HSN</th>
-                <th className="w-28">Lot</th>
-                <th className="w-28">Expiry</th>
                 <th className="w-24">Qty</th>
                 <th className="w-40">Price</th>
                 <th className="w-28">Disc %</th>
@@ -216,10 +200,6 @@ export default async function Page({ params }: { params: { id: string } }) {
               {rows.map((r, i) => (
                 <tr key={i}>
                   <td>{r.description}</td>
-                  <td>{r.category || "—"}</td>
-                  <td>{r.hsn_code || "—"}</td>
-                  <td>{r.batch_no || "—"}</td>
-                  <td>{r.exp_date ? fmtDate(r.exp_date) : "—"}</td>
                   <td>{r.qty}</td>
                   <td>{fmtINR(r.unit)}</td>
                   <td>{r.discPct.toFixed(2)}</td>
@@ -229,7 +209,7 @@ export default async function Page({ params }: { params: { id: string } }) {
               ))}
               {rows.length === 0 && (
                 <tr>
-                  <td colSpan={10} className="text-center py-6 muted">
+                  <td colSpan={6} className="text-center py-6 muted">
                     No items added to this quotation.
                   </td>
                 </tr>

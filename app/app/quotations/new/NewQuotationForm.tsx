@@ -14,10 +14,6 @@ type Product = {
     hsn_code?: string;
     unit?: string;
   };
-  category?: string | null;
-  hsn_code?: string | null;
-  batch_no?: string | null;
-  exp_date?: string | null;
 };
 
 type Item = {
@@ -90,7 +86,7 @@ export default function NewQuotationForm({
   const [items, setItems] = React.useState<Item[]>(
     initialItems?.length
       ? initialItems
-      : [{ product_id: undefined, description: '', qty: 1, price: 0, tax: 0, discount: 0, batch_no: '', exp_date: '' }]
+      : [{ product_id: undefined, description: '', qty: 1, price: 0, tax: 0, discount: 0 }]
   );
 
   // Customer fields
@@ -137,8 +133,6 @@ export default function NewQuotationForm({
         product_id: Number(productId) || undefined,
         description: p?.name || next[row].description || '',
         price,
-        batch_no: p?.batch_no ?? next[row].batch_no ?? '',
-        exp_date: dateInput(p?.exp_date ?? next[row].exp_date ?? ''),
       };
       return next;
     });
@@ -156,7 +150,7 @@ export default function NewQuotationForm({
   const addRow = () =>
     setItems((prev) => [
       ...prev,
-      { product_id: undefined, description: '', qty: 1, price: 0, tax: 0, discount: 0, batch_no: '', exp_date: '' },
+      { product_id: undefined, description: '', qty: 1, price: 0, tax: 0, discount: 0 },
     ]);
 
   const removeRow = (row: number) =>
@@ -340,41 +334,6 @@ export default function NewQuotationForm({
             <p className="muted mt-1 text-[11px]">0–100 = %, &gt;100 = ₹</p>
           </div>
 
-          {/* Extra item details */}
-          <div className="col-span-12 grid grid-cols-12 gap-3">
-            <div className="col-span-3">
-              <label className="block text-xs font-medium mb-1">Category</label>
-              <div className="w-full rounded-md border px-3 py-2 text-xs bg-white/40">
-                {products.find((p) => p.id === Number(it.product_id))?.category || '—'}
-              </div>
-            </div>
-            <div className="col-span-3">
-              <label className="block text-xs font-medium mb-1">HSN Code</label>
-              <div className="w-full rounded-md border px-3 py-2 text-xs bg-white/40">
-                {products.find((p) => p.id === Number(it.product_id))?.hsn_code ||
-                  products.find((p) => p.id === Number(it.product_id))?.meta?.hsn_code ||
-                  '—'}
-              </div>
-            </div>
-            <div className="col-span-3">
-              <label className="block text-xs font-medium mb-1">Lot / Batch No</label>
-              <input
-                className="w-full rounded-md border px-3 py-2 text-xs"
-                value={it.batch_no ?? ''}
-                onChange={(e) => setItems((s) => { const n=[...s]; n[i]={...n[i], batch_no: e.target.value}; return n; })}
-                placeholder="e.g., L1234"
-              />
-            </div>
-            <div className="col-span-3">
-              <label className="block text-xs font-medium mb-1">Expiry Date</label>
-              <input
-                type="date"
-                className="w-full rounded-md border px-3 py-2 text-xs"
-                value={it.exp_date ?? ''}
-                onChange={(e) => setItems((s) => { const n=[...s]; n[i]={...n[i], exp_date: e.target.value}; return n; })}
-              />
-            </div>
-          </div>
           {items.length > 1 && (
             <div className="col-span-12 flex flex-wrap items-center justify-between gap-3 border-t pt-3">
               <div className="text-sm">

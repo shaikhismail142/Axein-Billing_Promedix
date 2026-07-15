@@ -36,8 +36,7 @@ export default async function Page({ params }: { params: { id: string } }) {
   if (!qRs.rows.length) notFound();
 
   const itemsRs = await pool.query(
-    `select product_id, description, qty, price, tax, discount, batch_no,
-            to_char(exp_date, 'YYYY-MM-DD') as exp_date
+    `select product_id, description, qty, price, tax, discount
        from quotation_items
       where quotation_id = $1
       order by id asc`,
@@ -45,13 +44,7 @@ export default async function Page({ params }: { params: { id: string } }) {
   );
 
   const productsRs = await pool.query(
-    `select id,
-            name,
-            category,
-            coalesce(hsn_code, hsn, meta->>'hsn_code') as hsn_code,
-            meta,
-            coalesce(meta->>'batch_no', meta->>'lot_no', '') as batch_no,
-            coalesce(meta->>'exp_date', meta->>'expiry_date', '') as exp_date
+    `select id, name, meta
        from products
       order by lower(name) asc`,
   );
@@ -59,11 +52,7 @@ export default async function Page({ params }: { params: { id: string } }) {
   const products = productsRs.rows.map((p) => ({
     id: Number(p.id),
     name: String(p.name ?? ""),
-    category: p.category ?? null,
-    hsn_code: p.hsn_code ?? null,
     meta: p.meta ?? {},
-    batch_no: p.batch_no ?? null,
-    exp_date: p.exp_date ?? null,
   }));
 
   const initialItems = itemsRs.rows.map((it) => ({
@@ -73,8 +62,6 @@ export default async function Page({ params }: { params: { id: string } }) {
     price: toNum(it.price, 0),
     tax: toNum(it.tax, 0),
     discount: toNum(it.discount, 0),
-    batch_no: it.batch_no ?? "",
-    exp_date: dateOnly(it.exp_date),
   }));
 
   const quotation = qRs.rows[0];
