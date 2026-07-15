@@ -133,7 +133,8 @@ export async function GET(_req: Request, { params }: { params: { id: string } })
 
   // Items
   const itRs = await pool.query(
-    `select qi.description, qi.qty, qi.price, qi.tax, qi.discount, qi.batch_no, qi.exp_date,
+    `select qi.description, qi.qty, qi.price, qi.tax, qi.discount, qi.batch_no,
+            to_char(qi.exp_date, 'YYYY-MM-DD') as exp_date,
             COALESCE(p.category, p.meta->>'category') AS category,
             COALESCE(p.hsn_code, p.hsn, p.meta->>'hsn_code') AS hsn_code
        from quotation_items qi
@@ -194,7 +195,7 @@ export async function GET(_req: Request, { params }: { params: { id: string } })
       category: (it.category ?? "").toString(),
       hsn: (it.hsn_code ?? "").toString(),
       batch: (it.batch_no ?? "").toString(),
-      exp: it.exp_date ? fmtDate(it.exp_date) : "",
+      exp: it.exp_date ? String(it.exp_date) : "",
       qty: round2(qty),
       price: round2(price),
       discPct: round2(discPct),
@@ -211,222 +212,298 @@ export async function GET(_req: Request, { params }: { params: { id: string } })
   const roundoff = round2(rounded - grand);
   const final = round2(grand + roundoff);
 
-  // ---------- PDF (Tally-like layout) ----------
-  const doc = new PDFDocument({ size: "A4", margin: 36 }); // no bufferPages
+  // ---------- PDF (streamlined print layout) ----------
+  const doc = new PDFDocument({ size: "A4", margin: 28, bufferPages: true });
   const genAt = new Date();
   doc.info.Title = `Quotation ${q.quotation_number ?? q.id}`;
   doc.info.CreationDate = genAt as any;
 
   const registered = tryRegisterFonts(doc);
   const baseFont = registered ?? "Helvetica";
-  const boldFont = registered ? undefined : "Helvetica-Bold";
+  const boldFont = "Helvetica-Bold";
 
   const pageW = doc.page.width;
   const pageH = doc.page.height;
-  const margin = 36;
+  const margin = 28;
+  const footerH = 24;
   const contentW = pageW - margin * 2;
+  const navy = "#173b73";
+  const ink = "#111827";
+  const muted = "#4b5563";
+  const border = "#aab2c0";
+  const grid = "#d9dee7";
+  const soft = "#f5f7fb";
+  const headerFill = "#eef3fb";
 
-  // Header
-  doc.font(boldFont || baseFont).fontSize(26).text("QUOTATION", margin, margin, { width: contentW - 220 });
-  // Right meta box (also shows generation timestamp)
-  const rightW = 210, rightX = margin + contentW - rightW, topY = margin;
-  doc.rect(rightX, topY, rightW, 86).strokeColor("#9ca3af").lineWidth(0.8).stroke();
-  doc.font(baseFont).fontSize(10).fillColor("#111");
-  doc.text(`No: ${q.quotation_number ?? q.id}`, rightX + 10, topY + 10, { width: rightW - 20, align: "right" });
-  doc.text(`Date: ${fmtDate(q.quotation_date)}`, rightX + 10, topY + 26, { width: rightW - 20, align: "right" });
-  doc.text(`Valid Until: ${fmtDate(q.valid_until)}`, rightX + 10, topY + 42, { width: rightW - 20, align: "right" });
-  doc.text(`Generated: ${fmtDateTime(genAt)}`, rightX + 10, topY + 58, { width: rightW - 20, align: "right" });
+  const shortDate = (v?: string | null) => {
+    if (!v) return "-";
+    const d = new Date(v);
+    if (Number.isNaN(d.getTime())) return "-";
+    return d.toLocaleDateString("en-IN", { day: "2-digit", month: "2-digit", year: "2-digit" });
+  };
 
-  // Company block
-  const compX = margin, compY = margin + 34, compW = contentW - rightW - 12;
-  const lines: string[] = [];
-  if (business.company_name) lines.push(String(business.company_name));
-  const addrParts = [business.address_line1, business.address_line2, business.city, business.state, business.pincode]
-    .filter(Boolean).map(String);
-  if (addrParts.length) lines.push(addrParts.join(", "));
-  if (business.gstin) lines.push(`GSTIN: ${business.gstin}`);
-  if (business.phone) lines.push(`Phone: ${business.phone}`);
-  if (business.email) lines.push(`Email: ${business.email}`);
+  const safeText = (v: any, fallback = "-") => {
+    const t = v === null || v === undefined ? "" : String(v).trim();
+    return t || fallback;
+  };
 
-  if (lines.length) {
-    const compH = Math.max(38, 8 + lines.length * 13);
-    doc.rect(compX, compY - 4, compW, compH).strokeColor("#9ca3af").lineWidth(0.8).stroke();
-    let ly = compY;
-    doc.font(boldFont || baseFont).fontSize(12);
-    if (business.company_name) { doc.text(String(business.company_name), compX + 8, ly, { width: compW - 16 }); ly += 15; }
-    doc.font(baseFont).fontSize(10);
-    for (const l of lines.slice(business.company_name ? 1 : 0)) { doc.text(l, compX + 8, ly, { width: compW - 16 }); ly += 13; }
-  }
+  const drawCard = (x: number, y: number, w: number, h: number, fill = "#ffffff") => {
+    doc.save();
+    doc.roundedRect(x, y, w, h, 3).fillAndStroke(fill, border);
+    doc.restore();
+  };
 
-  // Horizontal rule
-  let y = Math.max(compY + Math.max(38, 8 + lines.length * 13), topY + 96) + 10;
-  doc.moveTo(margin, y).lineTo(margin + contentW, y).strokeColor("#111").lineWidth(1).stroke();
+  const drawHeader = () => {
+    const y0 = margin;
+    doc.fillColor(navy).font(boldFont).fontSize(25).text("QUOTATION", margin, y0, { width: 260 });
 
-  // Bill To
-  y += 8;
-  const billH = 42;
-  doc.rect(margin, y, contentW, billH).strokeColor("#9ca3af").lineWidth(0.8).stroke();
-  doc.font(boldFont || baseFont).fontSize(11).text("Bill To:", margin + 8, y + 8);
-  doc.font(baseFont).fontSize(11).text((q.customer_name ?? "-").toString(), margin + 8, y + 24, { width: contentW - 16 });
-  y += billH + 10;
+    const metaW = 210;
+    const metaX = margin + contentW - metaW;
+    drawCard(metaX, y0, metaW, 86);
+    doc.fillColor(ink).font(baseFont).fontSize(9.5);
+    doc.text(`No: ${q.quotation_number ?? q.id}`, metaX + 10, y0 + 10, { width: metaW - 20, align: "right" });
+    doc.text(`Date: ${fmtDate(q.quotation_date)}`, metaX + 10, y0 + 27, { width: metaW - 20, align: "right" });
+    doc.text(`Valid Until: ${fmtDate(q.valid_until)}`, metaX + 10, y0 + 44, { width: metaW - 20, align: "right" });
+    doc.text(`Generated: ${fmtDateTime(genAt)}`, metaX + 10, y0 + 61, { width: metaW - 20, align: "right" });
 
-  // Table header (smaller font, left aligned; GST% widened)
+    const compX = margin;
+    const compY = y0 + 42;
+    const compW = contentW - metaW - 14;
+    const companyLines: string[] = [];
+    if (business.company_name) companyLines.push(String(business.company_name));
+    const addrParts = [business.address_line1, business.address_line2, business.city, business.state, business.pincode]
+      .filter(Boolean).map(String);
+    if (addrParts.length) companyLines.push(addrParts.join(", "));
+    if (business.gstin) companyLines.push(`GSTIN: ${business.gstin}`);
+    if (business.phone) companyLines.push(`Phone: ${business.phone}`);
+    if (business.email) companyLines.push(`Email: ${business.email}`);
+    if (business.website) companyLines.push(`Website: ${business.website}`);
+
+    const compH = Math.max(50, 12 + companyLines.length * 12);
+    drawCard(compX, compY, compW, compH);
+    let ly = compY + 8;
+    doc.fillColor(ink).font(boldFont).fontSize(12).text(companyLines[0] || "axein.in", compX + 10, ly, { width: compW - 20 });
+    ly += 15;
+    doc.font(baseFont).fontSize(9).fillColor(muted);
+    for (const line of companyLines.slice(1)) {
+      doc.text(line, compX + 10, ly, { width: compW - 20 });
+      ly += 12;
+    }
+
+    const afterCards = Math.max(compY + compH, y0 + 98);
+    doc.moveTo(margin, afterCards + 8).lineTo(margin + contentW, afterCards + 8).strokeColor(navy).lineWidth(1.2).stroke();
+
+    const billY = afterCards + 18;
+    drawCard(margin, billY, contentW, 48, "#ffffff");
+    doc.fillColor(ink).font(boldFont).fontSize(10).text("Bill To", margin + 10, billY + 8);
+    doc.font(baseFont).fontSize(11).text(safeText(q.customer_name), margin + 10, billY + 25, { width: contentW - 20 });
+
+    return billY + 62;
+  };
+
   const cols = [
-    { key: "desc",  label: "Description", w: 150, align: "left"  as const },
-    { key: "cat",   label: "Category",    w: 45,  align: "left"  as const },
-    { key: "hsn",   label: "HSN",         w: 45,  align: "left"  as const },
-    { key: "lot",   label: "Lot",         w: 50,  align: "left"  as const },
-    { key: "exp",   label: "Exp",         w: 50,  align: "left"  as const },
-    { key: "qty",   label: "Qty",         w: 30,  align: "right" as const },
-    { key: "price", label: "Rate",        w: 45,  align: "right" as const },
-    { key: "disc",  label: "Disc%",       w: 35,  align: "right" as const },
-    { key: "gst",   label: "GST%",        w: 35,  align: "right" as const },
-    { key: "total", label: "Amt",         w: 38,  align: "right" as const },
+    { key: "desc", label: "Description", w: 166, align: "left" as const },
+    { key: "cat", label: "Cat", w: 48, align: "left" as const },
+    { key: "hsn", label: "HSN", w: 38, align: "left" as const },
+    { key: "lot", label: "Lot", w: 36, align: "left" as const },
+    { key: "exp", label: "Exp", w: 46, align: "left" as const },
+    { key: "qty", label: "Qty", w: 30, align: "right" as const },
+    { key: "rate", label: "Rate", w: 47, align: "right" as const },
+    { key: "disc", label: "Disc", w: 34, align: "right" as const },
+    { key: "gst", label: "GST", w: 32, align: "right" as const },
+    { key: "amt", label: "Amount", w: 62, align: "right" as const },
   ];
   const tableX = margin;
-  const tableW = cols.reduce((s, c) => s + c.w, 0); // ~523
+  const tableW = cols.reduce((sum, c) => sum + c.w, 0);
+  const tablePadX = 4;
+  const tableFontSize = 7.8;
+  const headerH = 22;
 
-  // Header lines
-  doc.moveTo(tableX, y).lineTo(tableX + tableW, y).strokeColor("#9ca3af").lineWidth(0.8).stroke();
-  y += 5;
-  doc.font(boldFont || baseFont).fontSize(8.5).fillColor("#111");
-  let hx = tableX + 4;
-  for (const c of cols) { doc.text(c.label, hx, y, { width: c.w - 8, align: "left" }); hx += c.w; }
-  y += 15;
-  doc.moveTo(tableX, y).lineTo(tableX + tableW, y).strokeColor("#9ca3af").lineWidth(0.8).stroke();
+  const drawTableHeader = (y: number, continued = false) => {
+    if (continued) {
+      doc.fillColor(muted).font(baseFont).fontSize(8).text(`Quotation ${q.quotation_number ?? q.id} - continued`, tableX, y - 12, {
+        width: tableW,
+        align: "right",
+      });
+    }
+    doc.save();
+    doc.rect(tableX, y, tableW, headerH).fillAndStroke(headerFill, border);
+    doc.restore();
+    let x = tableX;
+    doc.fillColor(ink).font(boldFont).fontSize(7.6);
+    for (const c of cols) {
+      doc.rect(x, y, c.w, headerH).strokeColor(border).lineWidth(0.6).stroke();
+      doc.text(c.label, x + tablePadX, y + 7, { width: c.w - tablePadX * 2, align: c.align });
+      x += c.w;
+    }
+    return y + headerH;
+  };
 
-  // Helpers
-  const padY = 6;
-  const stripe = "#f9fafb";
-  const ensurePage = (rowHeight: number) => {
-    if (y + rowHeight + 170 > pageH - margin) {
-      // Draw footer on THIS page (first page only requirement -> only if page number is 1)
-      if (doc.page.index === 0) {
-        drawFooterFirstPage(doc, baseFont, genAt);
-      }
+  let y = drawHeader();
+  y = drawTableHeader(y);
+
+  const ensureSpace = (needed: number, tableContinued = false) => {
+    if (y + needed > pageH - margin - footerH) {
       doc.addPage();
-      // new page header
-      y = margin;
-      doc.moveTo(tableX, y).lineTo(tableX + tableW, y).strokeColor("#9ca3af").lineWidth(0.8).stroke();
-      y += 5;
-      doc.font(boldFont || baseFont).fontSize(8.5).fillColor("#111");
-      let hx2 = tableX + 4;
-      for (const c of cols) { doc.text(c.label, hx2, y, { width: c.w - 8, align: "left" }); hx2 += c.w; }
-      y += 15;
-      doc.moveTo(tableX, y).lineTo(tableX + tableW, y).strokeColor("#9ca3af").lineWidth(0.8).stroke();
+      y = margin + 16;
+      if (tableContinued) y = drawTableHeader(y, true);
     }
   };
 
-  // Rows (height from all columns; vertical borders first; small lineGap)
-  doc.font(baseFont).fontSize(8.5).fillColor("#111");
-  rows.forEach((r, idx) => {
-    const cellTexts = [
-      String(r.desc || "-"),
-      String(r.category || "-"),
-      String(r.hsn || "-"),
-      String(r.batch || "-"),
-      String(r.exp || "-"),
+  const drawTableRow = (r: Row, idx: number) => {
+    doc.font(baseFont).fontSize(tableFontSize).fillColor(ink);
+    const cells = [
+      safeText(r.desc),
+      safeText(r.category),
+      safeText(r.hsn),
+      safeText(r.batch),
+      r.exp ? shortDate(r.exp) : "-",
       r.qty.toFixed(2),
       fmtAmt(r.price),
       r.discPct.toFixed(2),
       r.gstPct.toFixed(2),
       fmtAmt(r.lineTotal),
     ];
-    const colWidths = cols.map(c => c.w - 8);
-    let textH = 0;
-    for (let i = 0; i < cellTexts.length; i++) {
-      const h = doc.heightOfString(cellTexts[i] || "-", { width: colWidths[i], lineGap: 1 });
-      textH = Math.max(textH, h);
+
+    const textHeights = cells.map((txt, i) =>
+      doc.heightOfString(txt, { width: cols[i].w - tablePadX * 2, lineGap: 1 })
+    );
+    const rowH = Math.max(24, Math.ceil(Math.max(...textHeights) + 12));
+    ensureSpace(rowH, true);
+
+    if (idx % 2 === 1) {
+      doc.save();
+      doc.rect(tableX, y, tableW, rowH).fill(soft);
+      doc.restore();
     }
-    const rowH = Math.max(18, textH + padY * 2);
 
-    ensurePage(rowH);
-
-    if (idx % 2 === 1) { doc.save(); doc.rect(tableX, y, tableW, rowH).fill(stripe).restore(); }
-
-    // vertical borders
-    let vx = tableX;
-    for (const c of cols) {
-      doc.moveTo(vx, y).lineTo(vx, y + rowH).strokeColor("#e5e7eb").lineWidth(0.6).stroke();
-      vx += c.w;
-    }
-    doc.moveTo(tableX + tableW, y).lineTo(tableX + tableW, y + rowH).strokeColor("#e5e7eb").lineWidth(0.6).stroke();
-
-    // text
-    let cx = tableX + 4;
-    const baseY = y + padY;
+    let x = tableX;
+    doc.font(baseFont).fontSize(tableFontSize).fillColor(ink);
     for (let i = 0; i < cols.length; i++) {
-      doc.text(cellTexts[i], cx, baseY, { width: colWidths[i], align: cols[i].align, lineGap: 1 });
-      cx += cols[i].w;
+      const c = cols[i];
+      doc.rect(x, y, c.w, rowH).strokeColor(grid).lineWidth(0.45).stroke();
+      doc.text(cells[i], x + tablePadX, y + 6, {
+        width: c.w - tablePadX * 2,
+        align: c.align,
+        lineGap: 1,
+      });
+      x += c.w;
     }
-
-    // bottom border
-    doc.moveTo(tableX, y + rowH).lineTo(tableX + tableW, y + rowH).strokeColor("#e5e7eb").lineWidth(0.6).stroke();
-
     y += rowH;
-  });
-
-  // Bottom border of table
-  doc.moveTo(tableX, y).lineTo(tableX + tableW, y).strokeColor("#9ca3af").lineWidth(0.8).stroke();
-
-  // Totals card (right)
-  y += 10;
-  const cardW = 260;
-  const cardX = margin + contentW - cardW;
-  const cardPad = 12;
-  const needH = 136;
-  if (y + needH > pageH - margin) {
-    if (doc.page.index === 0) drawFooterFirstPage(doc, baseFont, genAt);
-    doc.addPage();
-    y = margin;
-  }
-
-  doc.rect(cardX, y, cardW, needH).strokeColor("#9ca3af").lineWidth(0.8).stroke();
-  let cy = y + cardPad;
-  const row = (label: string, value: string, strong = false) => {
-    doc.font((strong ? boldFont : undefined) || baseFont).fontSize(10).fillColor("#111");
-    doc.text(label, cardX + cardPad, cy, { width: 120 });
-    doc.text(value, cardX + cardW - cardPad - 120, cy, { width: 120, align: "right" });
-    cy += 16;
   };
-  row("Subtotal:", fmtINR(subtotal));
-  row("Discount:", `-${fmtINR(discountTotal)}`);
-  row("Tax Total:", fmtINR(taxTotal));
-  row("Round Off:", fmtINR(roundoff));
-  doc.moveTo(cardX + cardPad, cy - 4).lineTo(cardX + cardW - cardPad, cy - 4).strokeColor("#9ca3af").lineWidth(0.8).stroke();
-  row("Grand Total:", fmtINR(final), true);
 
-  // Notes & Terms (left)
-  cy += 8;
-  let notesY = Math.max(cy, y + cardPad);
-  if (q.meta?.notes) {
-    if (notesY + 42 > pageH - margin) {
-      if (doc.page.index === 0) drawFooterFirstPage(doc, baseFont, genAt);
-      doc.addPage(); notesY = margin;
-    }
-    doc.font((boldFont || baseFont)).fontSize(11).text("Notes:", margin, notesY);
-    notesY += 16;
-    doc.font(baseFont).fontSize(10).fillColor("#333")
-      .text(String(q.meta.notes), margin, notesY, { width: contentW - cardW - 24, lineGap: 1 });
-    notesY += doc.heightOfString(String(q.meta.notes), { width: contentW - cardW - 24, lineGap: 1 }) + 8;
-    doc.fillColor("#111");
-  }
-  if (q.meta?.terms) {
-    if (notesY + 42 > pageH - margin) {
-      if (doc.page.index === 0) drawFooterFirstPage(doc, baseFont, genAt);
-      doc.addPage(); notesY = margin;
-    }
-    doc.font((boldFont || baseFont)).fontSize(11).text("Terms & Conditions:", margin, notesY);
-    notesY += 16;
-    doc.font(baseFont).fontSize(10).fillColor("#333")
-      .text(String(q.meta.terms), margin, notesY, { width: contentW - cardW - 24, lineGap: 1 });
-    doc.fillColor("#111");
-  }
+  rows.forEach(drawTableRow);
+  doc.rect(tableX, y - 0.2, tableW, 0.2).strokeColor(border).lineWidth(0.8).stroke();
+  y += 12;
 
-  // --- Footer: ONLY on first page, once ---
-  if (doc.page.index === 0) {
-    drawFooterFirstPage(doc, baseFont, genAt);
-  }
+  const drawTotals = () => {
+    const cardW = 268;
+    const cardH = 116;
+    ensureSpace(cardH + 10, false);
+    const cardX = margin + contentW - cardW;
+    drawCard(cardX, y, cardW, cardH, "#ffffff");
+    let ty = y + 12;
+    const totalRow = (label: string, value: string, strong = false) => {
+      doc.fillColor(ink).font(strong ? boldFont : baseFont).fontSize(strong ? 10.2 : 9.2);
+      doc.text(label, cardX + 12, ty, { width: 110 });
+      doc.text(value, cardX + cardW - 142, ty, { width: 130, align: "right" });
+      ty += strong ? 17 : 15;
+    };
+    totalRow("Subtotal", fmtINR(subtotal));
+    totalRow("Discount", `-${fmtINR(discountTotal)}`);
+    totalRow("Tax Total", fmtINR(taxTotal));
+    totalRow("Round Off", fmtINR(roundoff));
+    doc.moveTo(cardX + 12, ty - 4).lineTo(cardX + cardW - 12, ty - 4).strokeColor(border).lineWidth(0.8).stroke();
+    totalRow("Grand Total", fmtINR(final), true);
+    y += cardH + 14;
+  };
+  drawTotals();
+
+  const wrapLines = (text: string, width: number, fontSize = 8.8) => {
+    doc.font(baseFont).fontSize(fontSize);
+    const out: string[] = [];
+    const paras = String(text || "").replace(/\r/g, "").split("\n");
+    for (const para of paras) {
+      const words = para.trim().split(/\s+/).filter(Boolean);
+      if (!words.length) {
+        out.push("");
+        continue;
+      }
+      let line = "";
+      for (const word of words) {
+        const next = line ? `${line} ${word}` : word;
+        if (doc.widthOfString(next) <= width || !line) {
+          line = next;
+        } else {
+          out.push(line);
+          line = word;
+        }
+      }
+      if (line) out.push(line);
+    }
+    return out;
+  };
+
+  const drawBoxedText = (title: string, text: string | undefined | null) => {
+    const raw = String(text || "").trim();
+    if (!raw) return;
+    const boxX = margin;
+    const boxW = contentW;
+    const pad = 10;
+    const titleH = 15;
+    const lineH = 11;
+    const lines = wrapLines(raw, boxW - pad * 2, 8.6);
+    let index = 0;
+    let part = 0;
+
+    while (index < lines.length) {
+      let available = pageH - margin - footerH - y;
+      if (available < 70) {
+        doc.addPage();
+        y = margin;
+        available = pageH - margin - footerH - y;
+      }
+      const maxLines = Math.max(1, Math.floor((available - pad * 2 - titleH) / lineH));
+      const chunk = lines.slice(index, index + maxLines);
+      const boxH = pad * 2 + titleH + chunk.length * lineH;
+
+      drawCard(boxX, y, boxW, boxH, "#ffffff");
+      doc.fillColor(navy).font(boldFont).fontSize(10.5)
+        .text(part ? `${title} (continued)` : title, boxX + pad, y + pad, { width: boxW - pad * 2 });
+      let lineY = y + pad + titleH;
+      doc.fillColor(ink).font(baseFont).fontSize(8.6);
+      for (const line of chunk) {
+        doc.text(line, boxX + pad, lineY, { width: boxW - pad * 2, lineBreak: false });
+        lineY += lineH;
+      }
+      y += boxH + 10;
+      index += chunk.length;
+      part += 1;
+    }
+  };
+
+  drawBoxedText("Notes", q.meta?.notes);
+  drawBoxedText("Terms & Conditions", q.meta?.terms);
+
+  const addFooters = () => {
+    const range = doc.bufferedPageRange();
+    for (let i = range.start; i < range.start + range.count; i++) {
+      doc.switchToPage(i);
+      const fy = pageH - 40;
+      doc.moveTo(margin, fy - 6).lineTo(pageW - margin, fy - 6).strokeColor("#d1d5db").lineWidth(0.5).stroke();
+
+      doc.fillColor(navy).font(boldFont).fontSize(8.5);
+      const brand = "axein.in";
+      doc.text(brand, (pageW - doc.widthOfString(brand)) / 2, fy, { lineBreak: false });
+
+      doc.fillColor("#6b7280").font(baseFont).fontSize(7.5);
+      const pageLabel = `Page ${i - range.start + 1} of ${range.count}`;
+      doc.text(pageLabel, pageW - margin - doc.widthOfString(pageLabel), fy, { lineBreak: false });
+    }
+    doc.switchToPage(range.start + range.count - 1);
+    doc.fillColor(ink);
+  };
+  addFooters();
 
   // stream -> ArrayBuffer
   const chunks: Uint8Array[] = [];
@@ -453,16 +530,4 @@ export async function GET(_req: Request, { params }: { params: { id: string } })
       "Cache-Control": "no-store",
     },
   });
-}
-
-/** footer (first page only) */
-function drawFooterFirstPage(doc: any, baseFont: string, genAt: Date) {
-  const m = 36;
-  const y = doc.page.height - m + 8;
-  doc.font(baseFont || "Helvetica").fontSize(8).fillColor("#6b7280");
-  doc.text(`Generated by AxEin Billing • Generated on ${genAt.toLocaleString("en-IN", { hour12: false })}`, m, y, {
-    width: doc.page.width - m * 2,
-    align: "center",
-  });
-  doc.fillColor("#111");
 }
