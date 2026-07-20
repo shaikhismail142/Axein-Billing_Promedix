@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { useTheme } from "@/app/providers/ThemeProvider"; // <-- use YOUR provider
 
 export default function ThemeToggle() {
-  const { resolvedTheme, toggle, setTheme, mode } = useTheme();
+  const { resolvedTheme, toggle, mode } = useTheme();
   const [mounted, setMounted] = useState(false);
   useEffect(() => setMounted(true), []);
 

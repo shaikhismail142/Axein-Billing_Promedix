@@ -16,9 +16,9 @@ type Item = {
   exp_date?: string | null;
 };
 
-type Props = { sale: any; items: Item[] };
+type Props = { sale: any; items: Item[]; businessType?: string };
 
-export default function InvoiceEditForm({ sale, items: initItems }: Props) {
+export default function InvoiceEditForm({ sale, items: initItems, businessType = "healthcare" }: Props) {
   const router = useRouter();
 
   // ---------- helpers ----------
@@ -77,6 +77,11 @@ export default function InvoiceEditForm({ sale, items: initItems }: Props) {
   const [paymentMethod, setPaymentMethod] = useState<string>(sale.payment_method || "");
   const [patientName, setPatientName] = useState<string>(sale.patient_name || "");
   const [doctorName, setDoctorName] = useState<string>(sale.doctor_name || "");
+  const [vehicleRegistration, setVehicleRegistration] = useState<string>(sale.vehicle_registration || "");
+  const [vehicleMakeModel, setVehicleMakeModel] = useState<string>(sale.vehicle_make_model || "");
+  const [odometer, setOdometer] = useState<string>(sale.odometer || "");
+  const [jobCardNo, setJobCardNo] = useState<string>(sale.job_card_no || "");
+  const [serviceAdvisor, setServiceAdvisor] = useState<string>(sale.service_advisor || "");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -155,6 +160,11 @@ export default function InvoiceEditForm({ sale, items: initItems }: Props) {
         customer_name: !customerId ? (customerInput || "").trim() : undefined,
         patient_name: (patientName || "").trim() || null,
         doctor_name: (doctorName || "").trim() || null,
+        vehicle_registration: (vehicleRegistration || "").trim() || null,
+        vehicle_make_model: (vehicleMakeModel || "").trim() || null,
+        odometer: (odometer || "").trim() || null,
+        job_card_no: (jobCardNo || "").trim() || null,
+        service_advisor: (serviceAdvisor || "").trim() || null,
         items: cleanItems,
       };
 
@@ -239,7 +249,7 @@ export default function InvoiceEditForm({ sale, items: initItems }: Props) {
         </label>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-3">
+      {businessType === "healthcare" && <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-3">
         <div>
           <label className="block mb-1 font-semibold">Patient Name</label>
           <input
@@ -266,7 +276,33 @@ export default function InvoiceEditForm({ sale, items: initItems }: Props) {
             readOnly
           />
         </div>
-      </div>
+      </div>}
+
+      {businessType === "garage" && (
+        <div className="card mb-3 p-3">
+          <div className="mb-2 font-semibold">Vehicle & Job Card</div>
+          <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
+            <label className="text-sm">Registration No.
+              <input value={vehicleRegistration} onChange={(e) => setVehicleRegistration(e.target.value.toUpperCase())} className="input mt-1" placeholder="MH 12 AB 1234" />
+            </label>
+            <label className="text-sm">Make / Model
+              <input value={vehicleMakeModel} onChange={(e) => setVehicleMakeModel(e.target.value)} className="input mt-1" placeholder="Maruti Swift" />
+            </label>
+            <label className="text-sm">Odometer (km)
+              <input value={odometer} onChange={(e) => setOdometer(e.target.value.replace(/[^0-9.]/g, ""))} className="input mt-1" inputMode="numeric" />
+            </label>
+            <label className="text-sm">Job Card No.
+              <input value={jobCardNo} onChange={(e) => setJobCardNo(e.target.value)} className="input mt-1" />
+            </label>
+            <label className="text-sm">Service Advisor / Mechanic
+              <input value={serviceAdvisor} onChange={(e) => setServiceAdvisor(e.target.value)} className="input mt-1" />
+            </label>
+            <label className="text-sm">DC No
+              <input value={sale.dc_no || ""} className="input mt-1" readOnly />
+            </label>
+          </div>
+        </div>
+      )}
 
       {/* Items table */}
       <div className="overflow-x-auto">

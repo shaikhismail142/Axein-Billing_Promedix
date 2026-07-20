@@ -26,7 +26,15 @@ export async function GET(req: NextRequest) {
       SELECT COUNT(*)::int AS cnt
       FROM quotations q
       LEFT JOIN customers c ON c.id = q.customer_id
-      WHERE ($1 = '' OR c.name ILIKE '%'||$1||'%' OR q.quotation_number ILIKE '%'||$1||'%')
+      WHERE ($1 = ''
+         OR c.name ILIKE '%'||$1||'%'
+         OR COALESCE(c.phone, '') ILIKE '%'||$1||'%'
+         OR COALESCE(c.gstin, '') ILIKE '%'||$1||'%'
+         OR q.quotation_number ILIKE '%'||$1||'%'
+         OR EXISTS (
+              SELECT 1 FROM quotation_items qi
+               WHERE qi.quotation_id=q.id AND qi.description ILIKE '%'||$1||'%'
+            ))
       `,
       [q]
     );
@@ -45,7 +53,15 @@ export async function GET(req: NextRequest) {
           c.name                                      as customer_name
         from quotations q
         left join customers c on c.id = q.customer_id
-        where ($1 = '' or c.name ilike '%'||$1||'%' or q.quotation_number ilike '%'||$1||'%')
+        where ($1 = ''
+           or c.name ilike '%'||$1||'%'
+           or coalesce(c.phone, '') ilike '%'||$1||'%'
+           or coalesce(c.gstin, '') ilike '%'||$1||'%'
+           or q.quotation_number ilike '%'||$1||'%'
+           or exists (
+                select 1 from quotation_items qs
+                 where qs.quotation_id=q.id and qs.description ilike '%'||$1||'%'
+              ))
         order by q.quotation_date desc, q.id desc
         limit $2 offset $3
       )
@@ -179,6 +195,11 @@ export async function POST(req: NextRequest) {
     notes = '',
     terms = '',
     valid_until = null, // ISO date or null
+    vehicle_registration = null,
+    vehicle_make_model = null,
+    odometer = null,
+    job_card_no = null,
+    service_advisor = null,
   }: {
     customer_id?: number | null;
     customer_name?: string | null;
@@ -186,6 +207,11 @@ export async function POST(req: NextRequest) {
     notes?: string;
     terms?: string;
     valid_until?: string | null;
+    vehicle_registration?: string | null;
+    vehicle_make_model?: string | null;
+    odometer?: string | number | null;
+    job_card_no?: string | null;
+    service_advisor?: string | null;
   } = payload ?? {};
 
   if (!isValidItems(items as Item[])) {
@@ -219,7 +245,15 @@ export async function POST(req: NextRequest) {
 
     // Generate quotation number (with basic collision handling)
     const quotation_number = await generateQuotationNumber(client);
-    const meta = { notes: notes ?? '', terms: terms ?? '' };
+    const meta = {
+      notes: notes ?? '',
+      terms: terms ?? '',
+      vehicle_registration: cleanText(vehicle_registration),
+      vehicle_make_model: cleanText(vehicle_make_model),
+      odometer: cleanText(odometer),
+      job_card_no: cleanText(job_card_no),
+      service_advisor: cleanText(service_advisor),
+    };
 
     const qRes = await client.query(
       `insert into quotations (customer_id, quotation_number, quotation_date, valid_until, meta)

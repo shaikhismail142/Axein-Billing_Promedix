@@ -59,7 +59,7 @@ export default async function Page({ searchParams }: { searchParams: { q?: strin
         <div className="flex items-center justify-between gap-3 mb-4">
           <div>
             <h1 className="text-2xl font-extrabold tracking-tight">Quotations</h1>
-            <p className="muted text-sm">Search by customer name or quotation number</p>
+            <p className="muted text-sm">Search customer, phone, GSTIN, quotation number, or item</p>
           </div>
           <div className="no-print flex items-center gap-2">
             <Link href="/quotations/new" className="btn-primary px-3 py-2 rounded-2xl text-sm">
@@ -76,7 +76,7 @@ export default async function Page({ searchParams }: { searchParams: { q?: strin
               type="text"
               name="q"
               defaultValue={q}
-              placeholder="Search (customer or number)…"
+              placeholder="Customer, phone, GSTIN, number, or item…"
               className="w-[360px]"
             />
             <button className="btn-outline px-3 py-2 rounded-2xl">Search</button>
@@ -124,6 +124,9 @@ export default async function Page({ searchParams }: { searchParams: { q?: strin
                       </Link>
                       <Link href={`/quotations/${r.id}/edit`} className="glass-btn px-2 py-1">
                         Edit
+                      </Link>
+                      <Link href={`/quotations/new?copyFrom=${r.id}`} className="glass-btn px-2 py-1">
+                        Duplicate
                       </Link>
                       <Link href={`/api/quotations/${r.id}/pdf`} className="glass-btn px-2 py-1">
                         PDF

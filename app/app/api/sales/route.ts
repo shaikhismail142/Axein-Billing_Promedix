@@ -23,6 +23,12 @@ type NewSaleBody = {
   customer_address?: string | null;
   patient_name?: string | null;
   doctor_name?: string | null;
+  vehicle_registration?: string | null;
+  vehicle_make_model?: string | null;
+  odometer?: string | number | null;
+  job_card_no?: string | null;
+  service_advisor?: string | null;
+  source_quotation_id?: number | string | null;
 
   invoice_date?: string | null; // ISO string (optional)
   is_return?: boolean;
@@ -401,6 +407,12 @@ export async function POST(req: Request) {
   const extra_label = nstr(payload.extra_label) || (extra_amount > 0 ? "Additional Charge" : null);
   const patient_name = nstr(payload.patient_name);
   const doctor_name = nstr(payload.doctor_name);
+  const vehicle_registration = nstr(payload.vehicle_registration);
+  const vehicle_make_model = nstr(payload.vehicle_make_model);
+  const odometer = nstr(payload.odometer);
+  const job_card_no = nstr(payload.job_card_no);
+  const service_advisor = nstr(payload.service_advisor);
+  const source_quotation_id = Number(payload.source_quotation_id);
 
   const client = await pool.connect();
   try {
@@ -440,6 +452,12 @@ export async function POST(req: Request) {
       extra_amount,
       patient_name,
       doctor_name,
+      vehicle_registration,
+      vehicle_make_model,
+      odometer,
+      job_card_no,
+      service_advisor,
+      source_quotation_id: Number.isFinite(source_quotation_id) ? source_quotation_id : null,
       dc_no,
     };
 

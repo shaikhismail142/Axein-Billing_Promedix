@@ -1,6 +1,7 @@
 'use client';
 
 import { usePathname } from 'next/navigation';
+import GlobalSearch from '@/components/GlobalSearch';
 
 function pageTitle(pathname: string | null) {
   if (!pathname || pathname === '/') return 'Dashboard';
@@ -51,7 +52,10 @@ export default function Topbar({ onMenu, collapsed }: { onMenu: () => void; coll
             {title}
           </div>
         </div>
-        <div className="ml-auto text-xs" style={{ color: 'var(--muted)' }}>IST</div>
+        <div className="ml-auto flex items-center gap-2">
+          <GlobalSearch />
+          <span className="hidden sm:inline text-xs" style={{ color: 'var(--muted)' }}>IST</span>
+        </div>
       </div>
     </header>
   );

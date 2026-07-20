@@ -25,6 +25,11 @@ type Sale = {
   customer_name?: string | null;
   patient_name?: string | null;
   doctor_name?: string | null;
+  vehicle_registration?: string | null;
+  vehicle_make_model?: string | null;
+  odometer?: string | null;
+  job_card_no?: string | null;
+  service_advisor?: string | null;
   dc_no?: string | null;
 };
 
@@ -56,6 +61,11 @@ export default async function EditInvoicePage({ params }: { params: { id: string
             (s.meta->>'notes')                               AS notes,
             (s.meta->>'patient_name')                        AS patient_name,
             (s.meta->>'doctor_name')                         AS doctor_name,
+            (s.meta->>'vehicle_registration')                AS vehicle_registration,
+            (s.meta->>'vehicle_make_model')                  AS vehicle_make_model,
+            (s.meta->>'odometer')                            AS odometer,
+            (s.meta->>'job_card_no')                         AS job_card_no,
+            (s.meta->>'service_advisor')                     AS service_advisor,
             (s.meta->>'dc_no')                               AS dc_no,
             c.name AS customer_name
        FROM sales s
@@ -77,6 +87,8 @@ export default async function EditInvoicePage({ params }: { params: { id: string
     [id]
   );
   const items = itemsRs.rows as Item[];
+  const businessRs = await pool.query(`SELECT value_json FROM settings WHERE key='business' LIMIT 1`);
+  const businessType = String(businessRs.rows?.[0]?.value_json?.business_type || 'healthcare');
 
   return (
     <div className="container">
@@ -92,7 +104,7 @@ export default async function EditInvoicePage({ params }: { params: { id: string
           </div>
         </div>
 
-        <InvoiceEditForm sale={sale} items={items} />
+        <InvoiceEditForm sale={sale} items={items} businessType={businessType} />
       </div>
     </div>
   );

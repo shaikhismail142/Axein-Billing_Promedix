@@ -10,6 +10,7 @@ const LicensePanel = dynamic(
 );
 
 type Business = {
+  business_type?: 'general' | 'healthcare' | 'garage' | 'retail';
   name: string;
   address: string;
   phone: string;
@@ -29,6 +30,7 @@ type Business = {
 };
 
 const DEFAULTS: Business = {
+  business_type: 'healthcare',
   name: '',
   address: '',
   phone: '',
@@ -223,6 +225,17 @@ export default function SettingsPage() {
         body: JSON.stringify(form),
       });
       if (!r.ok) throw new Error('Save failed');
+      if (form.business_type === 'garage') {
+        await Promise.all(
+          ['Spare Parts', 'Labour', 'Lubricants', 'Tyres', 'Accessories', 'Diagnostics'].map((name) =>
+            fetch('/api/categories', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ name }),
+            }).catch(() => null)
+          )
+        );
+      }
       setOk(true);
     } catch (e) {
       console.error(e);
@@ -447,6 +460,22 @@ export default function SettingsPage() {
         )}
 
         <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+          <div className="md:col-span-2 rounded-xl border p-3" style={{ borderColor: 'var(--glass-brd)', background: 'var(--surface-2)' }}>
+            <label className="mb-1 block text-sm font-semibold">Business Type</label>
+            <select
+              className="input"
+              value={form.business_type || 'healthcare'}
+              onChange={e => update('business_type', e.target.value as Business['business_type'])}
+            >
+              <option value="healthcare">Healthcare / Pharmacy</option>
+              <option value="garage">Garage / Auto Service</option>
+              <option value="retail">Retail / Trading</option>
+              <option value="general">General Services</option>
+            </select>
+            <p className="mt-2 text-xs muted">
+              This adapts Quick Billing and printed documents. Garage mode enables vehicle, odometer, job-card and service-advisor details and creates useful starter categories.
+            </p>
+          </div>
           <input className="input" placeholder="Business Name"
                  value={form.name} onChange={e => update('name', e.target.value)} />
           <input className="input" placeholder="Phone"

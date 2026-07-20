@@ -1,0 +1,56 @@
+{
+  "name": "axein-billing-desktop",
+  "version": "1.2.0",
+  "private": true,
+  "description": "AxEin Billing desktop launcher for Windows and macOS",
+  "main": "main.cjs",
+  "scripts": {
+    "start": "electron .",
+    "dist": "electron-builder --publish never",
+    "dist:win": "electron-builder --win nsis --x64 --publish never",
+    "dist:mac": "electron-builder --mac --publish never"
+  },
+  "devDependencies": {
+    "electron": "^43.1.1",
+    "electron-builder": "^26.15.3"
+  },
+  "build": {
+    "appId": "in.axein.billing",
+    "productName": "AxEin Billing",
+    "artifactName": "AxEin-Billing-${version}-${os}-${arch}.${ext}",
+    "files": [
+      "main.cjs",
+      "renderer/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "../db/migrations",
+        "to": "migrations",
+        "filter": ["**/*.sql"]
+      }
+    ],
+    "directories": {
+      "output": "dist"
+    },
+    "win": {
+      "icon": "build/icon.png",
+      "target": ["nsis"]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "AxEin Billing"
+    },
+    "mac": {
+      "icon": "build/icon.png",
+      "category": "public.app-category.business",
+      "target": [
+        { "target": "dmg", "arch": ["x64", "arm64"] },
+        { "target": "zip", "arch": ["x64", "arm64"] }
+      ]
+    }
+  }
+}

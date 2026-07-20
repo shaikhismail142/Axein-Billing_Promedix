@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="bg" x1="120" y1="80" x2="880" y2="930" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#2f6fed"/>
+      <stop offset="0.62" stop-color="#173b75"/>
+      <stop offset="1" stop-color="#0c244b"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="218" y1="180" x2="780" y2="840" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#55d9c3"/>
+      <stop offset="1" stop-color="#15957e"/>
+    </linearGradient>
+  </defs>
+  <rect x="42" y="42" width="940" height="940" rx="238" fill="url(#bg)"/>
+  <path d="M187 714C302 860 512 924 700 842C774 810 833 757 870 691C755 750 641 773 525 756C402 738 290 724 187 714Z" fill="url(#accent)" opacity="0.95"/>
+  <path d="M266 671L438 304H535L707 671H601L563 579H407L369 671H266ZM445 486H525L485 385L445 486Z" fill="white"/>
+  <path d="M604 304H694C769 304 820 345 820 410C820 451 800 483 766 502C811 519 837 554 837 603C837 680 776 720 689 720H604V626H686C716 626 735 614 735 590C735 567 716 554 687 554H604V465H681C707 465 723 454 723 433C723 413 707 401 680 401H604V304Z" fill="white"/>
+</svg>

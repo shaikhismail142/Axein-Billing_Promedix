@@ -45,7 +45,7 @@ TZ_DEFAULT           = "Asia/Kolkata"
 REPO_DEFAULT         = "https://github.com/shaikhismail142/Axein-Billing_Promedix.git"
 BRANCH_DEFAULT       = "codex/healthcare-customization"
 # Image install (recommended for Windows)
-WEB_IMAGE_DEFAULT    = "ghcr.io/shaikhismail142/axein-billing-promedix:2026-02-07-v3"
+WEB_IMAGE_DEFAULT    = "ghcr.io/shaikhismail142/axein-billing-promedix:2026-07-20-v1"
 GHCR_OWNER_DEFAULT   = "shaikhismail142"
 GHCR_NAME_DEFAULT    = "axein-billing-promedix"
 

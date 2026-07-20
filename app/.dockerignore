@@ -1,5 +1,6 @@
 # Keep build context small & safe
 node_modules
+**/node_modules
 .next
 .git
 .DS_Store
@@ -8,6 +9,7 @@ yarn-error.log
 pnpm-debug.log
 coverage
 dist
+**/dist
 
 # Env files – provide via compose/env vars instead
 .env

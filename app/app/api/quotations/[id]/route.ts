@@ -90,6 +90,11 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
     notes = "",
     terms = "",
     valid_until = null,
+    vehicle_registration = null,
+    vehicle_make_model = null,
+    odometer = null,
+    job_card_no = null,
+    service_advisor = null,
   }: {
     customer_id?: number | null;
     customer_name?: string | null;
@@ -97,6 +102,11 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
     notes?: string;
     terms?: string;
     valid_until?: string | null;
+    vehicle_registration?: string | null;
+    vehicle_make_model?: string | null;
+    odometer?: string | number | null;
+    job_card_no?: string | null;
+    service_advisor?: string | null;
   } = payload ?? {};
 
   if (!isValidItems(items as Item[])) {
@@ -133,6 +143,11 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
       ...currentMeta,
       notes: notes ?? "",
       terms: terms ?? "",
+      vehicle_registration: cleanText(vehicle_registration),
+      vehicle_make_model: cleanText(vehicle_make_model),
+      odometer: cleanText(odometer),
+      job_card_no: cleanText(job_card_no),
+      service_advisor: cleanText(service_advisor),
     };
 
     await client.query(

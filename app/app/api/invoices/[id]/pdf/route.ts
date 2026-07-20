@@ -25,6 +25,11 @@ type Sale = {
   extra_amount?: number | null;
   patient_name?: string | null;
   doctor_name?: string | null;
+  vehicle_registration?: string | null;
+  vehicle_make_model?: string | null;
+  odometer?: string | null;
+  job_card_no?: string | null;
+  service_advisor?: string | null;
   dc_no?: string | null;
 };
 
@@ -167,6 +172,11 @@ export async function GET(req: Request, { params }: { params: { id: string } }) 
             COALESCE((s.meta->>'extra_amount')::numeric, 0) AS extra_amount,
             (s.meta->>'patient_name') AS patient_name,
             (s.meta->>'doctor_name')  AS doctor_name,
+            (s.meta->>'vehicle_registration') AS vehicle_registration,
+            (s.meta->>'vehicle_make_model') AS vehicle_make_model,
+            (s.meta->>'odometer') AS odometer,
+            (s.meta->>'job_card_no') AS job_card_no,
+            (s.meta->>'service_advisor') AS service_advisor,
             (s.meta->>'dc_no')        AS dc_no,
             c.name AS customer_name
        FROM sales s
@@ -308,6 +318,31 @@ export async function GET(req: Request, { params }: { params: { id: string } }) 
         width: rightW, align: "right", lineBreak: false,
       });
     }
+    if (sale.vehicle_registration) {
+      doc.text(`Vehicle: ${sale.vehicle_registration}`, MARGIN + leftW, undefined, {
+        width: rightW, align: "right", lineBreak: false,
+      });
+    }
+    if (sale.vehicle_make_model) {
+      doc.text(`Make / Model: ${sale.vehicle_make_model}`, MARGIN + leftW, undefined, {
+        width: rightW, align: "right", lineBreak: false,
+      });
+    }
+    if (sale.odometer) {
+      doc.text(`Odometer: ${sale.odometer} km`, MARGIN + leftW, undefined, {
+        width: rightW, align: "right", lineBreak: false,
+      });
+    }
+    if (sale.job_card_no) {
+      doc.text(`Job Card: ${sale.job_card_no}`, MARGIN + leftW, undefined, {
+        width: rightW, align: "right", lineBreak: false,
+      });
+    }
+    if (sale.service_advisor) {
+      doc.text(`Advisor: ${sale.service_advisor}`, MARGIN + leftW, undefined, {
+        width: rightW, align: "right", lineBreak: false,
+      });
+    }
 
     // Ensure separator is **below** the taller block (text or logo)
     const approxLineH = 13.5; // baseline height heuristic
@@ -315,7 +350,12 @@ export async function GET(req: Request, { params }: { params: { id: string } }) 
       3 +
       (sale.dc_no ? 1 : 0) +
       (sale.patient_name ? 1 : 0) +
-      (sale.doctor_name ? 1 : 0);
+      (sale.doctor_name ? 1 : 0) +
+      (sale.vehicle_registration ? 1 : 0) +
+      (sale.vehicle_make_model ? 1 : 0) +
+      (sale.odometer ? 1 : 0) +
+      (sale.job_card_no ? 1 : 0) +
+      (sale.service_advisor ? 1 : 0);
     const rightBottom = topY + approxLineH * rightLines + 2;
     const sepY = Math.max(leftBottom, rightBottom) + 8;
 

@@ -21,6 +21,11 @@ type Sale = {
   customer_name: string | null;
   patient_name?: string | null;
   doctor_name?: string | null;
+  vehicle_registration?: string | null;
+  vehicle_make_model?: string | null;
+  odometer?: string | null;
+  job_card_no?: string | null;
+  service_advisor?: string | null;
   dc_no?: string | null;
 };
 
@@ -64,6 +69,11 @@ export default async function InvoicePage({ params }: { params: { id: string } }
             COALESCE(NULLIF(s.payment_method,''), (s.meta->>'payment_method')) AS payment_method,
             (s.meta->>'patient_name') AS patient_name,
             (s.meta->>'doctor_name')  AS doctor_name,
+            (s.meta->>'vehicle_registration') AS vehicle_registration,
+            (s.meta->>'vehicle_make_model') AS vehicle_make_model,
+            (s.meta->>'odometer') AS odometer,
+            (s.meta->>'job_card_no') AS job_card_no,
+            (s.meta->>'service_advisor') AS service_advisor,
             (s.meta->>'dc_no')        AS dc_no,
             c.name AS customer_name
        FROM sales s
@@ -113,6 +123,15 @@ export default async function InvoicePage({ params }: { params: { id: string } }
               {s.dc_no && <div>DC No: {s.dc_no}</div>}
             </div>
           )}
+          {(s.vehicle_registration || s.vehicle_make_model || s.odometer || s.job_card_no || s.service_advisor) && (
+            <div className="mt-2 grid grid-cols-1 gap-x-4 gap-y-0.5 text-sm muted sm:grid-cols-2">
+              {s.vehicle_registration && <div><b>Vehicle:</b> {s.vehicle_registration}</div>}
+              {s.vehicle_make_model && <div><b>Make / Model:</b> {s.vehicle_make_model}</div>}
+              {s.odometer && <div><b>Odometer:</b> {s.odometer} km</div>}
+              {s.job_card_no && <div><b>Job Card:</b> {s.job_card_no}</div>}
+              {s.service_advisor && <div><b>Advisor:</b> {s.service_advisor}</div>}
+            </div>
+          )}
           <p className="text-sm text-gray-600">
             Date: {new Date(s.invoice_date ?? Date.now()).toLocaleString("en-IN", {
               timeZone: "Asia/Kolkata",
@@ -135,6 +154,12 @@ export default async function InvoicePage({ params }: { params: { id: string } }
             className="rounded-lg border px-4 py-2 text-sm hover:bg-gray-50"
           >
             Edit
+          </Link>
+          <Link
+            href={`/billing?copyFrom=${id}`}
+            className="rounded-lg border px-4 py-2 text-sm"
+          >
+            Duplicate
           </Link>
           <Link href="/invoices" className="rounded-lg border px-4 py-2 text-sm">
             ← Back

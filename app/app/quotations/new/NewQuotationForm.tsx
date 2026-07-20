@@ -28,12 +28,20 @@ type Item = {
 };
 
 type InitialQuotation = {
-  id: number;
+  id?: number;
   quotation_number?: string | null;
   customer_id?: number | null;
   customer_name?: string | null;
   valid_until?: string | null;
-  meta?: { notes?: string; terms?: string } | null;
+  meta?: {
+    notes?: string;
+    terms?: string;
+    vehicle_registration?: string;
+    vehicle_make_model?: string;
+    odometer?: string;
+    job_card_no?: string;
+    service_advisor?: string;
+  } | null;
 };
 
 function dateInput(v?: string | Date | null) {
@@ -99,6 +107,19 @@ export default function NewQuotationForm({
   const [notes, setNotes] = React.useState(initialQuotation?.meta?.notes ?? '');
   const [terms, setTerms] = React.useState(initialQuotation?.meta?.terms ?? '');
   const [validUntil, setValidUntil] = React.useState<string>(dateInput(initialQuotation?.valid_until));
+  const [businessType, setBusinessType] = React.useState('healthcare');
+  const [vehicleRegistration, setVehicleRegistration] = React.useState(initialQuotation?.meta?.vehicle_registration ?? '');
+  const [vehicleMakeModel, setVehicleMakeModel] = React.useState(initialQuotation?.meta?.vehicle_make_model ?? '');
+  const [odometer, setOdometer] = React.useState(initialQuotation?.meta?.odometer ?? '');
+  const [jobCardNo, setJobCardNo] = React.useState(initialQuotation?.meta?.job_card_no ?? '');
+  const [serviceAdvisor, setServiceAdvisor] = React.useState(initialQuotation?.meta?.service_advisor ?? '');
+
+  React.useEffect(() => {
+    fetch('/api/settings?key=business', { cache: 'no-store' })
+      .then((r) => r.ok ? r.json() : null)
+      .then((j) => setBusinessType(String(j?.business_type || 'healthcare')))
+      .catch(() => undefined);
+  }, []);
 
   // Save state
   const [saving, setSaving] = React.useState(false);
@@ -180,6 +201,11 @@ export default function NewQuotationForm({
           notes,
           terms,
           valid_until: validUntil || null,
+          vehicle_registration: vehicleRegistration.trim() || null,
+          vehicle_make_model: vehicleMakeModel.trim() || null,
+          odometer: odometer.trim() || null,
+          job_card_no: jobCardNo.trim() || null,
+          service_advisor: serviceAdvisor.trim() || null,
         }),
       });
       if (!res.ok) throw new Error(await res.text());
@@ -207,7 +233,9 @@ export default function NewQuotationForm({
     <div className="space-y-4">
       <div className="flex items-start justify-between gap-3">
         <div>
-          <h1 className="text-2xl font-semibold">{isEdit ? 'Edit Quotation' : 'New Quotation'}</h1>
+          <h1 className="text-2xl font-semibold">
+            {isEdit ? 'Edit Quotation' : initialQuotation ? 'Duplicate Quotation' : 'New Quotation'}
+          </h1>
           {initialQuotation?.quotation_number && (
           <p className="muted text-sm mt-1">{initialQuotation.quotation_number}</p>
           )}
@@ -244,6 +272,32 @@ export default function NewQuotationForm({
           />
         </div>
       </div>
+
+      {businessType === 'garage' && (
+        <div className="rounded-xl border p-4">
+          <div className="mb-3">
+            <h2 className="font-semibold">Vehicle & Job Card</h2>
+            <p className="muted text-xs">These details remain attached when the estimate is edited, printed or converted.</p>
+          </div>
+          <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-3">
+            <label className="text-sm">Registration No.
+              <input className="input mt-1" value={vehicleRegistration} onChange={(e) => setVehicleRegistration(e.target.value.toUpperCase())} placeholder="MH 12 AB 1234" />
+            </label>
+            <label className="text-sm">Make / Model
+              <input className="input mt-1" value={vehicleMakeModel} onChange={(e) => setVehicleMakeModel(e.target.value)} placeholder="Maruti Swift" />
+            </label>
+            <label className="text-sm">Odometer (km)
+              <input className="input mt-1" inputMode="numeric" value={odometer} onChange={(e) => setOdometer(e.target.value.replace(/[^0-9.]/g, ''))} />
+            </label>
+            <label className="text-sm">Job Card No.
+              <input className="input mt-1" value={jobCardNo} onChange={(e) => setJobCardNo(e.target.value)} />
+            </label>
+            <label className="text-sm">Service Advisor / Mechanic
+              <input className="input mt-1" value={serviceAdvisor} onChange={(e) => setServiceAdvisor(e.target.value)} />
+            </label>
+          </div>
+        </div>
+      )}
 
       {/* Items */}
       {items.map((it, i) => (

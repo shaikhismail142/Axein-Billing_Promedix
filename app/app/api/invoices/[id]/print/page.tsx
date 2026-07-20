@@ -71,6 +71,11 @@ export default async function PrintInvoice({ params }: { params: { id: string } 
   const extraAmountExpr = hasSMeta ? "COALESCE((s.meta->>'extra_amount')::numeric, 0)" : "0";
   const patientExpr = hasSMeta ? "(s.meta->>'patient_name')" : "NULL";
   const doctorExpr = hasSMeta ? "(s.meta->>'doctor_name')" : "NULL";
+  const vehicleRegistrationExpr = hasSMeta ? "(s.meta->>'vehicle_registration')" : "NULL";
+  const vehicleMakeModelExpr = hasSMeta ? "(s.meta->>'vehicle_make_model')" : "NULL";
+  const odometerExpr = hasSMeta ? "(s.meta->>'odometer')" : "NULL";
+  const jobCardExpr = hasSMeta ? "(s.meta->>'job_card_no')" : "NULL";
+  const advisorExpr = hasSMeta ? "(s.meta->>'service_advisor')" : "NULL";
   const dcExpr = salesCols.has("dc_no") ? "s.dc_no" : hasSMeta ? "(s.meta->>'dc_no')" : "NULL";
 
   const saleRs = await pool.query(
@@ -87,6 +92,11 @@ export default async function PrintInvoice({ params }: { params: { id: string } 
             ${extraAmountExpr}                            AS extra_amount,
             ${patientExpr}                                AS patient_name,
             ${doctorExpr}                                 AS doctor_name,
+            ${vehicleRegistrationExpr}                     AS vehicle_registration,
+            ${vehicleMakeModelExpr}                        AS vehicle_make_model,
+            ${odometerExpr}                                AS odometer,
+            ${jobCardExpr}                                 AS job_card_no,
+            ${advisorExpr}                                 AS service_advisor,
             ${dcExpr}                                     AS dc_no,
             c.name AS customer_name, c.phone AS customer_phone, c.gstin AS customer_gstin, c.address AS customer_address
        FROM sales s
@@ -135,10 +145,6 @@ export default async function PrintInvoice({ params }: { params: { id: string } 
       [id]
     )
   ).rows as any[];
-
-  const balanceDue = Number(
-    s.pending_amount ?? Math.max(Number(s.total || 0) - Number(s.amount_paid || 0), 0)
-  );
 
   const extraAmount = Number(s.extra_amount || 0);
 
@@ -210,6 +216,11 @@ export default async function PrintInvoice({ params }: { params: { id: string } 
               <div><b>Date/Time:</b> {fmtDateIST12h(s.invoice_date || s.created_at)}</div>
               {s.patient_name && <div><b>Patient:</b> {s.patient_name}</div>}
               {s.doctor_name && <div><b>Doctor:</b> {s.doctor_name}</div>}
+              {s.vehicle_registration && <div><b>Vehicle:</b> {s.vehicle_registration}</div>}
+              {s.vehicle_make_model && <div><b>Make / Model:</b> {s.vehicle_make_model}</div>}
+              {s.odometer && <div><b>Odometer:</b> {s.odometer} km</div>}
+              {s.job_card_no && <div><b>Job Card:</b> {s.job_card_no}</div>}
+              {s.service_advisor && <div><b>Advisor:</b> {s.service_advisor}</div>}
               <div style={{ marginTop: 6 }}>
                 {s.is_return ? (
                   <span className="badge badge-return">RETURN</span>

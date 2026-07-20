@@ -14,6 +14,7 @@ type PageParams = {
   from?: string;      // YYYY-MM-DD
   to?: string;        // YYYY-MM-DD
   customerId?: string;
+  status?: "paid" | "partial" | "pending";
 };
 
 async function getColumns(table: string): Promise<Set<string>> {
@@ -51,35 +52,7 @@ export async function GET(req: Request) {
   const from    = (sp.from ?? "").trim();
   const to      = (sp.to ?? "").trim();
   const custId  = (sp.customerId ?? "").trim();
-
-  const where: string[] = [];
-  const params: any[] = [];
-  let p = 1;
-
-  if (q) {
-    where.push(`(s.invoice_no ILIKE $${p} OR c.name ILIKE $${p})`);
-    params.push(`%${q}%`);
-    p++;
-  }
-  if (from) {
-    where.push(`${DATE_EXPR} >= $${p}::timestamp`);
-    params.push(`${from} 00:00:00`);
-    p++;
-  }
-  if (to) {
-    where.push(`${DATE_EXPR} < ($${p}::date + INTERVAL '1 day')`);
-    params.push(to);
-    p++;
-  }
-  if (custId) {
-    where.push(`s.customer_id = $${p}::int`);
-    params.push(Number(custId));
-    p++;
-  }
-
-  const whereSQL = where.length ? `WHERE ${where.join(" AND ")}` : "";
-  const orderSQL = `ORDER BY ${sortColumn(sort!)} ${dir === "asc" ? "ASC" : "DESC"}, s.id ASC`;
-  const offset   = (page - 1) * perPage;
+  const status  = (sp.status ?? "").trim().toLowerCase();
 
   const salesCols = await getColumns("sales");
   const hasMeta = salesCols.has("meta");
@@ -101,6 +74,42 @@ export async function GET(req: Request) {
     : hasMeta
     ? "(s.meta->>'payment_status')"
     : "NULL";
+
+  const where: string[] = [];
+  const params: any[] = [];
+  let p = 1;
+
+  if (q) {
+    where.push(`(s.invoice_no ILIKE $${p}
+                 OR c.name ILIKE $${p}
+                 OR COALESCE(c.phone,'') ILIKE $${p}
+                 OR COALESCE(c.gstin,'') ILIKE $${p}
+                 OR EXISTS (SELECT 1 FROM sale_items si WHERE si.sale_id=s.id AND si.name ILIKE $${p}))`);
+    params.push(`%${q}%`);
+    p++;
+  }
+  if (from) {
+    where.push(`${DATE_EXPR} >= $${p}::timestamp`);
+    params.push(`${from} 00:00:00`);
+    p++;
+  }
+  if (to) {
+    where.push(`${DATE_EXPR} < ($${p}::date + INTERVAL '1 day')`);
+    params.push(to);
+    p++;
+  }
+  if (custId) {
+    where.push(`s.customer_id = $${p}::int`);
+    params.push(Number(custId));
+    p++;
+  }
+  if (status === "paid") where.push(`COALESCE(${pendingExpr}, 0) <= 0.01`);
+  if (status === "partial") where.push(`COALESCE(${paidExpr}, 0) > 0 AND COALESCE(${pendingExpr}, 0) > 0.01`);
+  if (status === "pending") where.push(`COALESCE(${paidExpr}, 0) <= 0 AND COALESCE(${pendingExpr}, 0) > 0.01`);
+
+  const whereSQL = where.length ? `WHERE ${where.join(" AND ")}` : "";
+  const orderSQL = `ORDER BY ${sortColumn(sort!)} ${dir === "asc" ? "ASC" : "DESC"}, s.id ASC`;
+  const offset   = (page - 1) * perPage;
 
   // total count
   const { rows: countRows } = await pool.query(

@@ -65,6 +65,13 @@ export default function Billing() {
   const [extraAmount, setExtraAmount] = useState<number>(0);
   const [patientName, setPatientName] = useState<string>("");
   const [doctorName, setDoctorName] = useState<string>("");
+  const [businessType, setBusinessType] = useState<"general" | "healthcare" | "garage" | "retail">("healthcare");
+  const [vehicleRegistration, setVehicleRegistration] = useState<string>("");
+  const [vehicleMakeModel, setVehicleMakeModel] = useState<string>("");
+  const [odometer, setOdometer] = useState<string>("");
+  const [jobCardNo, setJobCardNo] = useState<string>("");
+  const [serviceAdvisor, setServiceAdvisor] = useState<string>("");
+  const [copySource, setCopySource] = useState<string>("");
 
   // Payment
   const [paymentMode, setPaymentMode] = useState<"paid" | "partial" | "pending">("paid");
@@ -81,6 +88,63 @@ export default function Billing() {
         if (typeof j?.notes_default === 'string') setNotes(j.notes_default);
         if (typeof j?.terms_default === 'string') setTerms(j.terms_default);
       } catch { /* ignore */ }
+    })();
+  }, []);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const r = await fetch('/api/settings?key=business', { cache: 'no-store' });
+        if (!r.ok) return;
+        const j = await r.json();
+        const kind = String(j?.business_type || 'healthcare');
+        if (['general', 'healthcare', 'garage', 'retail'].includes(kind)) setBusinessType(kind as any);
+      } catch { /* use healthcare compatibility default */ }
+    })();
+  }, []);
+
+  // Duplicating pre-fills a new bill for review; it never writes or changes stock
+  // until the operator presses Save & View Invoice.
+  useEffect(() => {
+    const copyFrom = new URLSearchParams(window.location.search).get('copyFrom');
+    if (!copyFrom || !/^\d+$/.test(copyFrom)) return;
+    (async () => {
+      try {
+        const r = await fetch(`/api/sales/${copyFrom}`, { cache: 'no-store' });
+        if (!r.ok) throw new Error('Source invoice could not be loaded');
+        const j = await r.json();
+        const sale = j?.sale || {};
+        setCustomerId(sale.customer_id ? Number(sale.customer_id) : null);
+        setCustomerName(String(sale.customer_name || ''));
+        setItems((j?.items || []).map((it: any) => ({
+          product_id: it.product_id ? Number(it.product_id) : undefined,
+          name: String(it.name || 'Item'),
+          gst_slab: Number(it.gst_slab || 0),
+          qty: Number(it.qty || 1),
+          unit_price: Number(it.unit_price || 0),
+          discount_pct: Number(it.discount_pct || 0),
+          category: it.category || null,
+          hsn_code: it.hsn_code || null,
+          batch_no: it.batch_no || '',
+          exp_date: it.exp_date || '',
+        })));
+        setNotes(String(sale.notes || ''));
+        setTerms(String(sale.terms || ''));
+        setExtraLabel(String(sale.extra_label || 'Service Charge'));
+        setExtraAmount(Number(sale.extra_amount || 0));
+        setPatientName(String(sale.patient_name || ''));
+        setDoctorName(String(sale.doctor_name || ''));
+        setVehicleRegistration(String(sale.vehicle_registration || ''));
+        setVehicleMakeModel(String(sale.vehicle_make_model || ''));
+        setOdometer(String(sale.odometer || ''));
+        setJobCardNo(String(sale.job_card_no || ''));
+        setServiceAdvisor(String(sale.service_advisor || ''));
+        setPaymentMode('pending');
+        setAmountPaid(0);
+        setCopySource(String(sale.invoice_no || `#${copyFrom}`));
+      } catch (error) {
+        alert((error as Error).message || 'Could not duplicate invoice');
+      }
     })();
   }, []);
 
@@ -183,6 +247,11 @@ export default function Billing() {
         customer_name: customerId ? undefined : (customerName || '').trim() || undefined,
         patient_name: (patientName || '').trim() || null,
         doctor_name: (doctorName || '').trim() || null,
+        vehicle_registration: (vehicleRegistration || '').trim() || null,
+        vehicle_make_model: (vehicleMakeModel || '').trim() || null,
+        odometer: (odometer || '').trim() || null,
+        job_card_no: (jobCardNo || '').trim() || null,
+        service_advisor: (serviceAdvisor || '').trim() || null,
         notes: (notes || "").trim() || null,
         terms: (terms || "").trim() || null,
         extra_label: (extraLabel || "").trim() || null,
@@ -227,6 +296,11 @@ export default function Billing() {
         <div className="card" style={{ padding: 16 }}>
           <h1 style={{ marginTop: 0 }}>Quick Billing</h1>
           <p className="text-xs opacity-70">Create a bill fast — add customer, items, then confirm payment.</p>
+          {copySource && (
+            <div className="mt-3 rounded-xl border p-3 text-sm" style={{ borderColor: 'color-mix(in oklab, var(--primary) 38%, var(--glass-brd))', background: 'color-mix(in oklab, var(--primary) 9%, var(--surface-1))' }}>
+              New invoice copied from <b>{copySource}</b>. Payment has been reset to Pending; review quantities, prices and stock before saving.
+            </div>
+          )}
 
         {/* Customer (optional) */}
         <div className="card" style={{ padding: 12, marginBottom: 12 }}>
@@ -276,8 +350,8 @@ export default function Billing() {
           )}
         </div>
 
-        {/* Patient / Doctor */}
-        <div className="card" style={{ padding: 12, marginBottom: 12 }}>
+        {/* Industry-specific details */}
+        {businessType === 'healthcare' && <div className="card" style={{ padding: 12, marginBottom: 12 }}>
           <div className="grid md:grid-cols-2 gap-3">
             <div>
               <label style={{ fontSize: 12, color: 'var(--muted)' }}>Patient Name</label>
@@ -301,7 +375,36 @@ export default function Billing() {
           <div className="mt-2 text-xs opacity-70">
             These details will appear on the invoice and print.
           </div>
-        </div>
+        </div>}
+
+        {businessType === 'garage' && (
+          <div className="card" style={{ padding: 12, marginBottom: 12 }}>
+            <div className="mb-3 flex items-center justify-between gap-2">
+              <div>
+                <div className="text-sm font-semibold">Vehicle & Job Card</div>
+                <div className="text-xs muted">Saved with the invoice for service history and printed for the customer.</div>
+              </div>
+              <span className="rounded-full px-2 py-1 text-xs" style={{ background: 'color-mix(in oklab, var(--primary) 13%, var(--surface-2))' }}>Garage</span>
+            </div>
+            <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-3">
+              <label className="text-xs muted">Registration No.
+                <input className="input mt-1" placeholder="MH 12 AB 1234" value={vehicleRegistration} onChange={(e) => setVehicleRegistration(e.target.value.toUpperCase())} />
+              </label>
+              <label className="text-xs muted">Make / Model
+                <input className="input mt-1" placeholder="Maruti Swift" value={vehicleMakeModel} onChange={(e) => setVehicleMakeModel(e.target.value)} />
+              </label>
+              <label className="text-xs muted">Odometer (km)
+                <input className="input mt-1" inputMode="numeric" placeholder="45000" value={odometer} onChange={(e) => setOdometer(e.target.value.replace(/[^0-9.]/g, ''))} />
+              </label>
+              <label className="text-xs muted">Job Card No.
+                <input className="input mt-1" placeholder="JC-0012" value={jobCardNo} onChange={(e) => setJobCardNo(e.target.value)} />
+              </label>
+              <label className="text-xs muted">Service Advisor / Mechanic
+                <input className="input mt-1" placeholder="Technician name" value={serviceAdvisor} onChange={(e) => setServiceAdvisor(e.target.value)} />
+              </label>
+            </div>
+          </div>
+        )}
 
         {/* Product search / scan */}
         <div style={{ position: 'relative', marginBottom: 12 }}>

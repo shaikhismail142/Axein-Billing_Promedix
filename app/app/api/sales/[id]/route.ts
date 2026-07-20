@@ -24,6 +24,11 @@ type ReqBody = {
   items?: ReqItem[];
   patient_name?: string | null;
   doctor_name?: string | null;
+  vehicle_registration?: string | null;
+  vehicle_make_model?: string | null;
+  odometer?: string | number | null;
+  job_card_no?: string | null;
+  service_advisor?: string | null;
   dc_no?: string | null;
 };
 
@@ -43,6 +48,52 @@ async function getColumns(client: any, table: string): Promise<Set<string>> {
 }
 
 type ProductCols = { hasMeta: boolean; hasStockQty: boolean; hasStock: boolean };
+
+export async function GET(_req: Request, { params }: { params: { id: string } }) {
+  const saleId = Number(params.id);
+  if (!Number.isFinite(saleId)) return NextResponse.json({ error: "Invalid sale id" }, { status: 400 });
+
+  try {
+    const saleResult = await pool.query(
+      `SELECT s.id, s.invoice_no, s.customer_id,
+              c.name AS customer_name,
+              COALESCE(s.meta, '{}'::jsonb)->>'notes' AS notes,
+              COALESCE(s.meta, '{}'::jsonb)->>'terms' AS terms,
+              COALESCE(s.meta, '{}'::jsonb)->>'extra_label' AS extra_label,
+              COALESCE((COALESCE(s.meta, '{}'::jsonb)->>'extra_amount')::numeric, 0) AS extra_amount,
+              COALESCE(s.meta, '{}'::jsonb)->>'patient_name' AS patient_name,
+              COALESCE(s.meta, '{}'::jsonb)->>'doctor_name' AS doctor_name,
+              COALESCE(s.meta, '{}'::jsonb)->>'vehicle_registration' AS vehicle_registration,
+              COALESCE(s.meta, '{}'::jsonb)->>'vehicle_make_model' AS vehicle_make_model,
+              COALESCE(s.meta, '{}'::jsonb)->>'odometer' AS odometer,
+              COALESCE(s.meta, '{}'::jsonb)->>'job_card_no' AS job_card_no,
+              COALESCE(s.meta, '{}'::jsonb)->>'service_advisor' AS service_advisor
+         FROM sales s
+         LEFT JOIN customers c ON c.id=s.customer_id
+        WHERE s.id=$1
+        LIMIT 1`,
+      [saleId]
+    );
+    if (!saleResult.rowCount) return NextResponse.json({ error: "Invoice not found" }, { status: 404 });
+
+    const itemResult = await pool.query(
+      `SELECT si.product_id, si.name, si.qty, si.unit_price, si.discount_pct, si.gst_slab,
+              COALESCE(p.category, p.meta->>'category') AS category,
+              COALESCE(p.hsn_code, p.hsn, p.meta->>'hsn_code') AS hsn_code,
+              si.meta->>'batch_no' AS batch_no,
+              si.meta->>'exp_date' AS exp_date
+         FROM sale_items si
+         LEFT JOIN products p ON p.id=si.product_id
+        WHERE si.sale_id=$1
+        ORDER BY si.id`,
+      [saleId]
+    );
+
+    return NextResponse.json({ sale: saleResult.rows[0], items: itemResult.rows });
+  } catch (error: any) {
+    return NextResponse.json({ error: error?.message || "Failed to load invoice" }, { status: 500 });
+  }
+}
 
 export async function PUT(req: Request, { params }: { params: { id: string } }) {
   const saleId = Number(params.id);
@@ -212,6 +263,11 @@ export async function PUT(req: Request, { params }: { params: { id: string } }) 
         : (curMeta.notes ?? null),
       patient_name: typeof body.patient_name === 'string' ? body.patient_name : (curMeta.patient_name ?? null),
       doctor_name: typeof body.doctor_name === 'string' ? body.doctor_name : (curMeta.doctor_name ?? null),
+      vehicle_registration: typeof body.vehicle_registration === 'string' ? body.vehicle_registration : (curMeta.vehicle_registration ?? null),
+      vehicle_make_model: typeof body.vehicle_make_model === 'string' ? body.vehicle_make_model : (curMeta.vehicle_make_model ?? null),
+      odometer: body.odometer !== undefined && body.odometer !== null ? String(body.odometer) : (curMeta.odometer ?? null),
+      job_card_no: typeof body.job_card_no === 'string' ? body.job_card_no : (curMeta.job_card_no ?? null),
+      service_advisor: typeof body.service_advisor === 'string' ? body.service_advisor : (curMeta.service_advisor ?? null),
       dc_no: typeof body.dc_no === 'string' ? body.dc_no : (curMeta.dc_no ?? null),
     };
 

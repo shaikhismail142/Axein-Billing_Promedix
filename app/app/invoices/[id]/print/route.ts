@@ -53,6 +53,11 @@ export async function GET(_: Request, { params }: { params: { id: string } }) {
             COALESCE((s.meta->>'extra_amount')::numeric, 0)  AS extra_amount,
             (s.meta->>'patient_name')                          AS patient_name,
             (s.meta->>'doctor_name')                           AS doctor_name,
+            (s.meta->>'vehicle_registration')                  AS vehicle_registration,
+            (s.meta->>'vehicle_make_model')                    AS vehicle_make_model,
+            (s.meta->>'odometer')                              AS odometer,
+            (s.meta->>'job_card_no')                           AS job_card_no,
+            (s.meta->>'service_advisor')                       AS service_advisor,
             (s.meta->>'dc_no')                                 AS dc_no,
             c.name AS customer_name, c.phone AS customer_phone,
             c.gstin AS customer_gstin, c.address AS customer_address,
@@ -149,6 +154,11 @@ export async function GET(_: Request, { params }: { params: { id: string } }) {
         <div><b>Date/Time:</b> ${fmtDateIST12h(displayDate)}</div>
         ${s.patient_name ? `<div><b>Patient:</b> ${s.patient_name}</div>` : ""}
         ${s.doctor_name ? `<div><b>Doctor:</b> ${s.doctor_name}</div>` : ""}
+        ${s.vehicle_registration ? `<div><b>Vehicle:</b> ${s.vehicle_registration}</div>` : ""}
+        ${s.vehicle_make_model ? `<div><b>Make / Model:</b> ${s.vehicle_make_model}</div>` : ""}
+        ${s.odometer ? `<div><b>Odometer:</b> ${s.odometer} km</div>` : ""}
+        ${s.job_card_no ? `<div><b>Job Card:</b> ${s.job_card_no}</div>` : ""}
+        ${s.service_advisor ? `<div><b>Advisor:</b> ${s.service_advisor}</div>` : ""}
         <div style="margin-top:6px">
             ${
           s.is_return

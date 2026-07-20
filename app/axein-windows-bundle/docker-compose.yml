@@ -71,7 +71,7 @@ services:
     restart: "no"
 
   web:
-    image: ghcr.io/shaikhismail142/axein-billing:v0.4.1
+    image: ghcr.io/shaikhismail142/axein-billing-promedix:2026-07-20-v1
     platform: linux/amd64           # Windows/Intel/WSL2 friendly
     env_file: .env
     depends_on:

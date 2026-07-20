@@ -134,6 +134,15 @@ export default async function Page({ params }: { params: { id: string } }) {
               {quotation.customer_name}
             </p>
           )}
+          {(quotation.meta?.vehicle_registration || quotation.meta?.vehicle_make_model || quotation.meta?.odometer || quotation.meta?.job_card_no || quotation.meta?.service_advisor) && (
+            <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-sm muted">
+              {quotation.meta?.vehicle_registration && <span><b>Vehicle:</b> {quotation.meta.vehicle_registration}</span>}
+              {quotation.meta?.vehicle_make_model && <span><b>Make / Model:</b> {quotation.meta.vehicle_make_model}</span>}
+              {quotation.meta?.odometer && <span><b>Odometer:</b> {quotation.meta.odometer} km</span>}
+              {quotation.meta?.job_card_no && <span><b>Job Card:</b> {quotation.meta.job_card_no}</span>}
+              {quotation.meta?.service_advisor && <span><b>Advisor:</b> {quotation.meta.service_advisor}</span>}
+            </div>
+          )}
         </div>
 
         <div className="flex flex-wrap gap-2 no-print">
@@ -142,6 +151,12 @@ export default async function Page({ params }: { params: { id: string } }) {
             className="glass-btn text-sm px-3 py-2 rounded-2xl"
           >
             Edit
+          </Link>
+          <Link
+            href={`/quotations/new?copyFrom=${quotation.id}`}
+            className="glass-btn text-sm px-3 py-2 rounded-2xl"
+          >
+            Duplicate
           </Link>
           <Link
             href={`/api/quotations/${quotation.id}/pdf`}
@@ -179,6 +194,11 @@ export default async function Page({ params }: { params: { id: string } }) {
               <div>Quotation #: {quotation.quotation_number ?? `#${quotation.id}`}</div>
               <div>Date: {fmtDate(quotation.quotation_date)}</div>
               {quotation.valid_until && <div>Valid Until: {fmtDate(quotation.valid_until)}</div>}
+              {quotation.meta?.vehicle_registration && <div>Vehicle: {quotation.meta.vehicle_registration}</div>}
+              {quotation.meta?.vehicle_make_model && <div>Make / Model: {quotation.meta.vehicle_make_model}</div>}
+              {quotation.meta?.odometer && <div>Odometer: {quotation.meta.odometer} km</div>}
+              {quotation.meta?.job_card_no && <div>Job Card: {quotation.meta.job_card_no}</div>}
+              {quotation.meta?.service_advisor && <div>Advisor: {quotation.meta.service_advisor}</div>}
             </div>
           </div>
         </div>

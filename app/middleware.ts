@@ -27,7 +27,8 @@ export async function middleware(req: NextRequest) {
   // Allow activation routes and license APIs themselves
   if (
     pathname.startsWith("/activate") ||
-    pathname.startsWith("/api/license")
+    pathname.startsWith("/api/license") ||
+    pathname === "/api/health"
   ) {
     return NextResponse.next();
   }

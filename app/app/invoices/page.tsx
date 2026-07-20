@@ -36,6 +36,7 @@ type PageParams = {
   from?: string;
   to?: string;
   customerId?: string;
+  status?: string;
 };
 
 /* ---------- Helpers ---------- */
@@ -61,6 +62,7 @@ async function fetchInvoices(sp: PageParams): Promise<ApiResp> {
   if (sp.from) qs.set("from", String(sp.from));
   if (sp.to) qs.set("to", String(sp.to));
   if (sp.customerId) qs.set("customerId", String(sp.customerId));
+  if (sp.status) qs.set("status", String(sp.status));
 
   const res = await fetch(`${buildBaseUrl()}/api/invoices?${qs}`, { cache: "no-store" });
   if (!res.ok) {
@@ -113,6 +115,7 @@ export default async function InvoicesPage({ searchParams }: { searchParams: Pag
   const dir  = (searchParams.dir as "asc" | "desc") || "desc";
   const from = typeof searchParams.from === "string" ? searchParams.from : "";
   const to   = typeof searchParams.to === "string" ? searchParams.to : "";
+  const status = typeof searchParams.status === "string" ? searchParams.status : "";
 
   let data: ApiResp | null = null;
   let errorMsg = "";
@@ -133,6 +136,7 @@ export default async function InvoicesPage({ searchParams }: { searchParams: Pag
   if (q) baseQS.set("q", q);
   if (from) baseQS.set("from", from);
   if (to) baseQS.set("to", to);
+  if (status) baseQS.set("status", status);
 
   const makeURL = (p: number) => {
     const sp = new URLSearchParams(baseQS.toString());
@@ -166,9 +170,15 @@ export default async function InvoicesPage({ searchParams }: { searchParams: Pag
 
             <div className="flex items-center gap-2">
               <form action="/invoices" className="flex items-center gap-2 flex-wrap">
-                <input className="input" name="q"    defaultValue={q}    placeholder="Search invoice or customer…" />
+                <input className="input" name="q" defaultValue={q} placeholder="Invoice, customer, phone or item…" />
                 <input className="input" name="from" type="date" defaultValue={from}/>
                 <input className="input" name="to"   type="date" defaultValue={to}/>
+                <select className="input" name="status" defaultValue={status} aria-label="Payment status">
+                  <option value="">All payments</option>
+                  <option value="paid">Paid</option>
+                  <option value="partial">Partial</option>
+                  <option value="pending">Pending</option>
+                </select>
                 <input type="hidden" name="perPage" value={perPage} />
                 <input type="hidden" name="sort" value={sort} />
                 <input type="hidden" name="dir" value={dir} />
@@ -247,8 +257,10 @@ export default async function InvoicesPage({ searchParams }: { searchParams: Pag
                       <td className="px-3 py-2">{inv.customer_name ?? "—"}</td>
                       <td className="px-3 py-2">{fmtINR(inv.total)}</td>
                       <td className="px-3 py-2 text-right">
-                        <div className="flex justify-end gap-2">
+                        <div className="flex justify-end gap-2 flex-wrap">
                           <Link className="btn-outline" href={`/invoices/${inv.id}`}>View</Link>
+                          <Link className="btn-outline" href={`/invoices/${inv.id}/edit`}>Edit</Link>
+                          <Link className="btn-outline" href={`/billing?copyFrom=${inv.id}`}>Duplicate</Link>
                           <Link className="btn-outline" href={`/invoices/${inv.id}/print`} target="_blank">Print</Link>
                         </div>
                       </td>

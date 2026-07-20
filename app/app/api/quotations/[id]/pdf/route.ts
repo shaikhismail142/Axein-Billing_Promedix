@@ -270,12 +270,28 @@ export async function GET(_req: Request, { params }: { params: { id: string } })
     const afterCards = Math.max(compY + compH, y0 + 98);
     doc.moveTo(margin, afterCards + 8).lineTo(margin + contentW, afterCards + 8).strokeColor(navy).lineWidth(1.2).stroke();
 
+    const vehicleLines = [
+      q.meta?.vehicle_registration ? `Vehicle: ${q.meta.vehicle_registration}` : "",
+      q.meta?.vehicle_make_model ? `Make / Model: ${q.meta.vehicle_make_model}` : "",
+      q.meta?.odometer ? `Odometer: ${q.meta.odometer} km` : "",
+      q.meta?.job_card_no ? `Job Card: ${q.meta.job_card_no}` : "",
+      q.meta?.service_advisor ? `Advisor: ${q.meta.service_advisor}` : "",
+    ].filter(Boolean);
+    const billH = vehicleLines.length ? Math.max(58, 38 + vehicleLines.length * 11) : 48;
     const billY = afterCards + 18;
-    drawCard(margin, billY, contentW, 48, "#ffffff");
+    drawCard(margin, billY, contentW, billH, "#ffffff");
     doc.fillColor(ink).font(boldFont).fontSize(10).text("Bill To", margin + 10, billY + 8);
     doc.font(baseFont).fontSize(11).text(safeText(q.customer_name), margin + 10, billY + 25, { width: contentW - 20 });
+    if (vehicleLines.length) {
+      doc.font(baseFont).fontSize(8.5).fillColor(muted);
+      let vehicleY = billY + 42;
+      for (const line of vehicleLines) {
+        doc.text(line, margin + 10, vehicleY, { width: contentW - 20 });
+        vehicleY += 11;
+      }
+    }
 
-    return billY + 62;
+    return billY + billH + 14;
   };
 
   const cols = [

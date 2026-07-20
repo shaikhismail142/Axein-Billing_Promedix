@@ -17,7 +17,7 @@ param(
   [Parameter(Mandatory=$false)]
   [string] $Branch  = "codex/healthcare-customization",
   [Parameter(Mandatory=$false)]
-  [string] $WebImage = "ghcr.io/shaikhismail142/axein-billing-promedix:2026-02-07-v1",
+  [string] $WebImage = "ghcr.io/shaikhismail142/axein-billing-promedix:2026-07-20-v1",
   [Parameter(Mandatory=$false)]
   [int]    $AppPort = 3000,
   [switch] $SkipRedis,
