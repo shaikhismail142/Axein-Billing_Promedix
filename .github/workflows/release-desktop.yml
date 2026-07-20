@@ -127,6 +127,7 @@ jobs:
         with:
           path: release
           merge-multiple: true
+          pattern: "!*.dockerbuild"
       - name: Add Windows bootstrap and checksums
         run: |
           cp app/axein-windows-bundle/axein-bootstrap.py release/AxEin-Windows-Bootstrap.py
