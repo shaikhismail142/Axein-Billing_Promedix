@@ -2,8 +2,9 @@
 # -*- coding: utf-8 -*-
 """
 AxEin – Bootstrap (Python)
-v7.5 (promedix)
-- Interactive GHCR tag picker (sorted by last update) when GHCR token provided
+v8.0 (promedix)
+- Credential-free image install from architecture-specific GitHub release assets
+- Optional GHCR/image override remains available for administrators
 - Align S3 env names: S3_KEY / S3_SECRET
 - MinIO console mapped 9003:9001 & healthcheck; web depends_on service_healthy
 - LICENSE_PUBLIC_KEY discovery: info.json (publicKeyBase64 or publicKey_spki_base64) + .env.template/.env.example
@@ -45,7 +46,13 @@ TZ_DEFAULT           = "Asia/Kolkata"
 REPO_DEFAULT         = "https://github.com/shaikhismail142/Axein-Billing_Promedix.git"
 BRANCH_DEFAULT       = "codex/healthcare-customization"
 # Image install (recommended for Windows)
-WEB_IMAGE_DEFAULT    = "ghcr.io/shaikhismail142/axein-billing-promedix:2026-07-20-v1"
+APP_VERSION_DEFAULT  = "1.2.0"
+RELEASE_TAG_DEFAULT  = f"v{APP_VERSION_DEFAULT}"
+WEB_IMAGE_DEFAULT    = f"axein-billing-promedix:{APP_VERSION_DEFAULT}"
+IMAGE_ARCHIVE_URL_DEFAULT = (
+    "https://github.com/shaikhismail142/Axein-Billing_Promedix/"
+    f"releases/download/{RELEASE_TAG_DEFAULT}/AxEin-Billing-Image-linux-{{arch}}.tar.gz"
+)
 GHCR_OWNER_DEFAULT   = "shaikhismail142"
 GHCR_NAME_DEFAULT    = "axein-billing-promedix"
 
@@ -246,10 +253,11 @@ def write_compose(dest: Path, root_dir: Path, app_dir: Path, app_port: int, tz: 
 """ if enable_redis else ""
 
     if web_image:
+        pull_policy = "never" if web_image == WEB_IMAGE_DEFAULT else "missing"
         web_block = f"""
   web:
     image: {web_image}{service_platform_yaml}
-    pull_policy: always
+    pull_policy: {pull_policy}
     depends_on:
       db:
         condition: service_healthy
@@ -995,6 +1003,84 @@ def choose_web_image(base_image_default: str, ghcr_token: str) -> str:
         tag = prompt or default_tag
         return f"{registry}/{owner}/{name}:{tag}" if owner else f"{registry}/{name}:{tag}"
 
+
+def docker_image_exists(image_ref: str) -> bool:
+    return run(["docker", "image", "inspect", image_ref], check=False) == 0
+
+
+def release_image_arch(host_os: str, host_arch: str) -> str | None:
+    platform_name = compose_platform_for(host_os, host_arch)
+    if platform_name == "linux/amd64":
+        return "amd64"
+    if platform_name == "linux/arm64":
+        return "arm64"
+    return None
+
+
+def download_and_load_release_image(image_ref: str, url_template: str, cache_dir: Path,
+                                    host_os: str, host_arch: str) -> bool:
+    if docker_image_exists(image_ref):
+        ok(f"Application image already available: {image_ref}")
+        return True
+
+    arch = release_image_arch(host_os, host_arch)
+    if not arch:
+        warn(f"No portable AxEin image is available for architecture: {host_arch}")
+        return False
+
+    try:
+        url = url_template.format(arch=arch)
+    except (KeyError, ValueError):
+        warn("Invalid --image-archive-url template; include {arch} in the URL.")
+        return False
+
+    ensure_dir(cache_dir)
+    archive = cache_dir / f"AxEin-Billing-Image-linux-{arch}.tar.gz"
+    partial = archive.with_suffix(archive.suffix + ".part")
+    info(f"Downloading portable application image ({arch}) from GitHub Releases…")
+
+    try:
+        request = urllib.request.Request(url, headers={"User-Agent": "AxEin-Billing-Bootstrap"})
+        with urllib.request.urlopen(request, timeout=120) as response, partial.open("wb") as output:
+            total = int(response.headers.get("Content-Length") or 0)
+            received = 0
+            last_reported = 0
+            while True:
+                chunk = response.read(1024 * 1024)
+                if not chunk:
+                    break
+                output.write(chunk)
+                received += len(chunk)
+                if received - last_reported >= 10 * 1024 * 1024 or (total and received == total):
+                    last_reported = received
+                    if total:
+                        print(f"\r[axein] Downloaded {received // 1048576} MB / {total // 1048576} MB "
+                              f"({received * 100 // total}%)", end="", flush=True)
+                    else:
+                        print(f"\r[axein] Downloaded {received // 1048576} MB", end="", flush=True)
+        print()
+        partial.replace(archive)
+    except Exception as exc:
+        try:
+            partial.unlink(missing_ok=True)
+        except Exception:
+            pass
+        warn(f"Portable application image download failed: {exc}")
+        return False
+
+    info("Loading AxEin Billing into Docker Desktop…")
+    rc = run(["docker", "load", "-i", os.fspath(archive)], check=False)
+    try:
+        archive.unlink(missing_ok=True)
+    except Exception:
+        pass
+    if rc != 0 or not docker_image_exists(image_ref):
+        warn(f"Downloaded archive did not load the expected image: {image_ref}")
+        return False
+
+    ok(f"Application image ready: {image_ref}")
+    return True
+
 # ---------- Wait helpers ----------
 
 def wait_for_service(compose_file: Path, service: str, cmd: list[str], timeout_sec=180) -> bool:
@@ -1316,7 +1402,10 @@ def main():
     ap.add_argument("--no-redis", action="store_true", help="Skip Redis service.")
     ap.add_argument("--no-mailpit", action="store_true", help="Skip Mailpit (SMTP dev inbox) service.")
     ap.add_argument("--no-minio", action="store_true", help="Skip MinIO service & seeding.")
-    ap.add_argument("--web-image", default=WEB_IMAGE_DEFAULT, help="Prebuilt web image (GHCR). Empty = build from source.")
+    ap.add_argument("--web-image", default=WEB_IMAGE_DEFAULT,
+                    help="Docker image to run. The default is loaded from a GitHub release archive.")
+    ap.add_argument("--image-archive-url", default=IMAGE_ARCHIVE_URL_DEFAULT,
+                    help="Portable image URL template; use {arch} for amd64/arm64.")
     ap.add_argument("--pick-tag", action="store_true", help="Show GHCR tag picker even if a tag is specified.")
     ap.add_argument("--build-from-source", action="store_true", help="Force build from source (ignore --web-image).")
     ap.add_argument("--no-reexec", action="store_true", help="Disable self-update/reexec from repo.")
@@ -1377,11 +1466,11 @@ def main():
         fail("Docker Compose plugin missing. Install Docker Desktop >= v2.20 or Docker Compose v2.")
         sys.exit(2)
 
-    # GHCR login (optional but recommended for tag listing/private pulls)
+    # GHCR login is only needed when an administrator explicitly supplies a GHCR image.
     if args.web_image and args.web_image.strip() and args.ghcr_username and args.ghcr_token:
         docker_login_ghcr(args.ghcr_username, args.ghcr_token, target)
 
-    # Web image selection: default to image (recommended for Windows)
+    # Web image selection: use the credential-free release image by default.
     picked_image: str | None = None
     if args.build_from_source:
         ok("Build-from-source requested; skipping web image.")
@@ -1497,11 +1586,25 @@ def main():
     write_init_sql(init_dir, args.db_user, args.db_pass, args.db_name)
 
     # Pull / Up
-    # Pre-pull web image to catch auth/tag errors early
+    # The default image is downloaded from GitHub Releases and loaded locally.
+    # Explicit image overrides retain the regular docker pull behavior.
     if picked_image:
-        info(f"Pulling web image: {picked_image}")
-        web_rc = run(["docker","pull", picked_image], check=False)
-        if web_rc != 0:
+        if picked_image == WEB_IMAGE_DEFAULT:
+            image_ready = download_and_load_release_image(
+                picked_image,
+                args.image_archive_url,
+                root_dir / "downloads",
+                host_os,
+                host_arch,
+            )
+        elif docker_image_exists(picked_image):
+            ok(f"Application image already available: {picked_image}")
+            image_ready = True
+        else:
+            info(f"Pulling configured web image: {picked_image}")
+            image_ready = run(["docker", "pull", picked_image], check=False) == 0
+
+        if not image_ready:
             warn("Web image pull failed.")
             fallback = input("Switch to build-from-source instead? [Y/n]: ").strip().lower()
             if fallback in ("", "y", "yes"):
@@ -1515,8 +1618,20 @@ def main():
                               enable_minio=(not args.no_minio), web_image=None,
                               host_os=host_os, host_arch=host_arch)
 
-    info("Pulling container images…")
-    retry(lambda: run(["docker","compose","-f",os.fspath(compose_file),"pull"], check=False), attempts=3, delay=5, what="compose pull")
+    info("Pulling supporting service images…")
+    support_services = ["db"]
+    if not args.no_redis:
+        support_services.append("redis")
+    if not args.no_minio:
+        support_services.append("minio")
+    if not args.no_mailpit:
+        support_services.append("mailpit")
+    retry(
+        lambda: run(["docker", "compose", "-f", os.fspath(compose_file), "pull", *support_services], check=False),
+        attempts=3,
+        delay=5,
+        what="supporting image pull",
+    )
 
     info("Starting containers (first time may take a few minutes)…")
     retry(lambda: run(["docker","compose","-f",os.fspath(compose_file),"up","-d","--build"], check=False), attempts=2, delay=5, what="compose up")

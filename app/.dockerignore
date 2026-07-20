@@ -10,6 +10,11 @@ pnpm-debug.log
 coverage
 dist
 **/dist
+desktop
+docs
+axein-windows-bundle
+script-tools
+tools/license-keygen/ed25519-private.pem
 
 # Env files – provide via compose/env vars instead
 .env

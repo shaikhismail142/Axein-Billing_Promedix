@@ -71,7 +71,8 @@ services:
     restart: "no"
 
   web:
-    image: ghcr.io/shaikhismail142/axein-billing-promedix:2026-07-20-v1
+    image: axein-billing-promedix:1.2.0
+    pull_policy: never
     platform: linux/amd64           # Windows/Intel/WSL2 friendly
     env_file: .env
     depends_on:

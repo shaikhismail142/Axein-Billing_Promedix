@@ -3,15 +3,20 @@ const { spawn } = require("child_process");
 const fs = require("fs");
 const path = require("path");
 const http = require("http");
+const https = require("https");
+const { pipeline } = require("stream/promises");
 
 const APP_URL = process.env.AXEIN_APP_URL || "http://127.0.0.1:3000";
-const WEB_IMAGE = process.env.AXEIN_WEB_IMAGE ||
-  "ghcr.io/shaikhismail142/axein-billing-promedix:2026-07-20-v1";
+const APP_VERSION = "1.2.0";
+const RELEASE_TAG = `v${APP_VERSION}`;
+const RELEASE_IMAGE = !process.env.AXEIN_WEB_IMAGE;
+const WEB_IMAGE = process.env.AXEIN_WEB_IMAGE || `axein-billing-promedix:${APP_VERSION}`;
 const LICENSE_PUBLIC_KEY =
   "MCowBQYDK2VwAyEAb5mB0eifFbLbrfvp5JNYwJ5ULHL2Iu61GFcgwue/nzI=";
 const SCHEMA_VERSION = "2026-07-20-v1";
 const RELEASES_URL =
   "https://github.com/shaikhismail142/Axein-Billing_Promedix/releases";
+const RELEASE_DOWNLOAD_URL = `${RELEASES_URL}/download/${RELEASE_TAG}`;
 
 let mainWindow;
 let composeFile;
@@ -61,6 +66,98 @@ function dockerCompose(args, options) {
   return run("docker", ["compose", "-f", composeFile, ...args], options);
 }
 
+function imageArchitecture() {
+  if (process.arch === "x64") return "amd64";
+  if (process.arch === "arm64") return "arm64";
+  throw new Error(`AxEin does not yet provide a desktop image for ${process.arch}.`);
+}
+
+function dockerPlatform() {
+  return `linux/${imageArchitecture()}`;
+}
+
+async function imageExists() {
+  const result = await run("docker", ["image", "inspect", WEB_IMAGE], { allowFailure: true });
+  return result.code === 0;
+}
+
+function downloadFile(url, destination, redirects = 5) {
+  return new Promise((resolve, reject) => {
+    const client = url.startsWith("https:") ? https : http;
+    const request = client.get(url, { headers: { "User-Agent": "AxEin-Billing-Desktop" } }, (response) => {
+      if (response.statusCode >= 300 && response.statusCode < 400 && response.headers.location) {
+        response.resume();
+        if (redirects <= 0) {
+          reject(new Error("Too many redirects while downloading the AxEin application image."));
+          return;
+        }
+        const nextUrl = new URL(response.headers.location, url).toString();
+        resolve(downloadFile(nextUrl, destination, redirects - 1));
+        return;
+      }
+      if (response.statusCode !== 200) {
+        response.resume();
+        reject(new Error(`Application image download failed with HTTP ${response.statusCode}.`));
+        return;
+      }
+
+      const partial = `${destination}.part`;
+      const total = Number(response.headers["content-length"] || 0);
+      let received = 0;
+      let lastReported = 0;
+      response.on("data", (chunk) => {
+        received += chunk.length;
+        if (received - lastReported < 5 * 1024 * 1024 && received !== total) return;
+        lastReported = received;
+        const progress = total
+          ? `${Math.round((received / total) * 100)}% (${Math.round(received / 1048576)} MB)`
+          : `${Math.round(received / 1048576)} MB`;
+        setStatus("Downloading AxEin Billing", progress);
+      });
+
+      pipeline(response, fs.createWriteStream(partial))
+        .then(() => {
+          fs.renameSync(partial, destination);
+          resolve();
+        })
+        .catch((error) => {
+          try { fs.rmSync(partial, { force: true }); } catch (_) {}
+          reject(error);
+        });
+    });
+    request.on("error", reject);
+    request.setTimeout(120000, () => request.destroy(new Error("Application image download timed out.")));
+  });
+}
+
+async function ensureWebImage() {
+  if (await imageExists()) {
+    setStatus("Application image ready", WEB_IMAGE);
+    return;
+  }
+
+  if (!RELEASE_IMAGE) {
+    setStatus("Downloading the configured application image", WEB_IMAGE);
+    await run("docker", ["pull", "--platform", dockerPlatform(), WEB_IMAGE]);
+    return;
+  }
+
+  const assetName = `AxEin-Billing-Image-linux-${imageArchitecture()}.tar.gz`;
+  const cacheDirectory = path.join(app.getPath("userData"), "cache");
+  const archive = path.join(cacheDirectory, assetName);
+  fs.mkdirSync(cacheDirectory, { recursive: true });
+
+  setStatus("Downloading AxEin Billing", "One-time application setup");
+  await downloadFile(`${RELEASE_DOWNLOAD_URL}/${assetName}`, archive);
+  setStatus("Installing AxEin Billing", "Loading the local application image");
+  await run("docker", ["load", "-i", archive]);
+  try { fs.rmSync(archive, { force: true }); } catch (_) {}
+
+  if (!(await imageExists())) {
+    throw new Error(`The downloaded application image did not provide ${WEB_IMAGE}.`);
+  }
+}
+
 function migrationsPath() {
   return app.isPackaged
     ? path.join(process.resourcesPath, "migrations")
@@ -73,6 +170,7 @@ function yamlPath(value) {
 
 function composeYaml() {
   const migrations = yamlPath(migrationsPath());
+  const platform = dockerPlatform();
   return `name: axein-desktop
 services:
   db:
@@ -127,6 +225,8 @@ services:
         done
   web:
     image: ${WEB_IMAGE}
+    platform: ${platform}
+    pull_policy: never
     depends_on:
       db:
         condition: service_healthy
@@ -210,6 +310,8 @@ async function ensureRuntime() {
   setStatus("Starting local data services", "PostgreSQL, Redis, storage, and mail service");
   await dockerCompose(["up", "-d", "db", "redis", "minio", "mailpit"]);
 
+  await ensureWebImage();
+
   const marker = path.join(app.getPath("userData"), `schema-${SCHEMA_VERSION}.done`);
   if (!fs.existsSync(marker)) {
     setStatus("Preparing the billing database", "Applying safe schema updates");
@@ -217,8 +319,7 @@ async function ensureRuntime() {
     fs.writeFileSync(marker, new Date().toISOString(), "utf8");
   }
 
-  setStatus("Starting AxEin Billing", "Downloading the app once may take a few minutes");
-  await dockerCompose(["pull", "web"]);
+  setStatus("Starting AxEin Billing", "Connecting the desktop app to your local data");
   await dockerCompose(["up", "-d", "web"]);
 
   setStatus("Opening your workspace", "Waiting for the secure local service");

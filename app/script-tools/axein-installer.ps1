@@ -17,7 +17,9 @@ param(
   [Parameter(Mandatory=$false)]
   [string] $Branch  = "codex/healthcare-customization",
   [Parameter(Mandatory=$false)]
-  [string] $WebImage = "ghcr.io/shaikhismail142/axein-billing-promedix:2026-07-20-v1",
+  [string] $WebImage = "axein-billing-promedix:1.2.0",
+  [Parameter(Mandatory=$false)]
+  [string] $ImageArchiveUrl = "https://github.com/shaikhismail142/Axein-Billing_Promedix/releases/download/v1.2.0/AxEin-Billing-Image-linux-amd64.tar.gz",
   [Parameter(Mandatory=$false)]
   [int]    $AppPort = 3000,
   [switch] $SkipRedis,
@@ -151,8 +153,42 @@ if (Test-Path (Join-Path $APP_DIR '.git')) {
 }
 Ok "Source ready"
 
+$APP_SOURCE_DIR = if (Test-Path (Join-Path $APP_DIR 'app\package.json')) {
+  Join-Path $APP_DIR 'app'
+} else {
+  $APP_DIR
+}
+
+if (-not $BuildFromSource) {
+  docker image inspect $WebImage *> $null
+  if ($LASTEXITCODE -ne 0) {
+    Title "Application Image"
+    $archive = Join-Path $AXEIN_ROOT 'AxEin-Billing-Image-linux-amd64.tar.gz'
+    Info "Downloading the portable AxEin Billing image (no GHCR login required)…"
+    Invoke-WebRequest -UseBasicParsing -Uri $ImageArchiveUrl -OutFile $archive
+    Info "Loading AxEin Billing into Docker Desktop…"
+    docker load -i $archive
+    if ($LASTEXITCODE -ne 0) { Fail "Could not load the AxEin application image."; exit 4 }
+    Remove-Item $archive -Force -ErrorAction SilentlyContinue
+    docker image inspect $WebImage *> $null
+    if ($LASTEXITCODE -ne 0) { Fail "Expected image not found after loading: $WebImage"; exit 4 }
+    Ok "Application image ready"
+  }
+}
+
 # ---- License public key ----
-$infoPath = Join-Path $APP_DIR 'tools\license-keygen\info.json'
+$licenseTools = Join-Path $APP_SOURCE_DIR 'tools\license-keygen'
+$privateKey = Join-Path $licenseTools 'ed25519-private.pem'
+if (-not (Test-Path $privateKey)) {
+  $initKeys = Join-Path $licenseTools 'init-keys.js'
+  if (-not (Test-Path $initKeys)) { Fail "Missing license key generator: $initKeys"; exit 5 }
+  Info "Creating this installation's local license signing keys…"
+  & node $initKeys
+  if ($LASTEXITCODE -ne 0 -or -not (Test-Path $privateKey)) {
+    Fail "Could not create local license signing keys."; exit 5
+  }
+}
+$infoPath = Join-Path $APP_SOURCE_DIR 'tools\license-keygen\info.json'
 if (-not (Test-Path $infoPath)) { Fail "Missing $infoPath (public key)."; exit 4 }
 $pub = (Get-Content $infoPath -Raw | ConvertFrom-Json).publicKeyBase64
 if (-not $pub) { Fail "info.json missing publicKeyBase64"; exit 5 }
@@ -202,7 +238,7 @@ $dependsBlock = ($depends -join "\n")
 $webBlock = if ($BuildFromSource) { @"
   web:
     build:
-      context: $((Join-Path $APP_DIR 'app') -replace '\\','/')
+      context: $($APP_SOURCE_DIR -replace '\\','/')
       dockerfile: Dockerfile
     depends_on:
 $dependsBlock
@@ -231,6 +267,7 @@ $dependsBlock
 "@ } else { @"
   web:
     image: $WebImage
+    pull_policy: never
     depends_on:
 $dependsBlock
     environment:
@@ -305,8 +342,7 @@ if (-not (Wait-Http "http://localhost:$AppPort" 240)) {
 Title "License"
 $licenseKey = New-AxKey
 $expiresIso = "$LicenseEnd`T23:59:59.000Z"
-$privateKey = Join-Path $APP_DIR 'tools\license-keygen\ed25519-private.pem'
-$signScript = Join-Path $APP_DIR 'tools\license-keygen\sign-license.js'
+$signScript = Join-Path $APP_SOURCE_DIR 'tools\license-keygen\sign-license.js'
 if (-not (Test-Path $privateKey)) { Warn "Missing private key: $privateKey" } else {
   $json = node $signScript --key $privateKey --license $licenseKey --email $AdminEmail --expires $expiresIso | Out-String
   $licenseObj = $json | ConvertFrom-Json

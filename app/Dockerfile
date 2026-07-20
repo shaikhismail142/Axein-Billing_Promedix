@@ -45,7 +45,9 @@ WORKDIR /app
 
 # tz + system DejaVu fonts (has ₹ glyphs)
 RUN apk add --no-cache tzdata ttf-dejavu && \
-    ln -snf /usr/share/zoneinfo/Asia/Kolkata /etc/localtime && echo "Asia/Kolkata" > /etc/timezone
+    ln -snf /usr/share/zoneinfo/Asia/Kolkata /etc/localtime && echo "Asia/Kolkata" > /etc/timezone && \
+    addgroup -g 1001 -S nodejs && adduser -S nextjs -u 1001 -G nodejs && \
+    chown nextjs:nodejs /app
 
 # Runtime env
 ENV NODE_ENV=production \
@@ -55,22 +57,18 @@ ENV NODE_ENV=production \
     NEXT_TELEMETRY_DISABLED=1
 
 # Copy minimal runtime files
-COPY package*.json ./
+COPY --chown=nextjs:nodejs package*.json ./
 # Install only production deps
-RUN npm ci --omit=dev
+USER nextjs
+RUN npm ci --omit=dev && npm cache clean --force
 
 # Bring compiled output and public assets from builder
-COPY --from=builder /app/.next ./.next
-COPY --from=builder /app/public ./public
+COPY --chown=nextjs:nodejs --from=builder /app/.next ./.next
+COPY --chown=nextjs:nodejs --from=builder /app/public ./public
 
 # (Optional) If your server code reads files from /app at runtime, uncomment:
 # COPY --from=builder /app/app ./app
 # COPY --from=builder /app/next.config.* ./   # only if you need it at runtime
-
-# Run as non-root for safety
-RUN addgroup -g 1001 -S nodejs && adduser -S nextjs -u 1001 -G nodejs && \
-    chown -R nextjs:nodejs /app
-USER nextjs
 
 EXPOSE 3000
 

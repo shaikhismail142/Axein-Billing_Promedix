@@ -14,6 +14,10 @@ The desktop app creates an `axein-desktop` Compose project with persistent named
 volumes. Services use `restart: unless-stopped`, and the desktop launcher is set
 to open at login so the local app is restored after a restart.
 
+The first launch downloads the matching `linux/amd64` or `linux/arm64` image
+archive from the public GitHub release and loads it into Docker Desktop. No
+container-registry account, GHCR token, or source-code build is required.
+
 ## Local packaging
 
 ```bash
