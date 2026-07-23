@@ -63,9 +63,22 @@ jobs:
           revision="$(git -C site-source rev-parse HEAD)"
           staging="/srv/axein/site-staging/${GITHUB_RUN_ID}"
           ssh -i ~/.ssh/axein_release "axein@${SSH_HOST}" "install -d -m 700 '${staging}'"
-          scp -i ~/.ssh/axein_release \
-            site-source/platform/axein-modern/dist/axein-modern-standalone.tgz \
-            "axein@${SSH_HOST}:${staging}/axein-modern-standalone.tgz"
+          uploaded=0
+          for attempt in 1 2 3; do
+            if timeout 180 scp -C \
+              -o ConnectTimeout=20 \
+              -o ServerAliveInterval=15 \
+              -o ServerAliveCountMax=4 \
+              -i ~/.ssh/axein_release \
+              site-source/platform/axein-modern/dist/axein-modern-standalone.tgz \
+              "axein@${SSH_HOST}:${staging}/axein-modern-standalone.tgz"; then
+              uploaded=1
+              break
+            fi
+            echo "Bundle upload attempt ${attempt} failed; retrying."
+            sleep 5
+          done
+          test "${uploaded}" -eq 1
           printf 'revision=%s\n' "${revision}" >> "${GITHUB_ENV}"
           printf 'staging=%s\n' "${staging}" >> "${GITHUB_ENV}"
 
