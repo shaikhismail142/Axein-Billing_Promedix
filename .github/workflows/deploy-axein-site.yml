@@ -140,7 +140,8 @@ jobs:
 
           if printf '%s' "${exec_start}" | grep -Fq '.next/standalone/server.js'; then
             mkdir -p "${release_dir}/.next"
-            ln -sfn ../.. "${release_dir}/.next/standalone"
+            ln -sfn .. "${release_dir}/.next/standalone"
+            test -s "${release_dir}/.next/standalone/server.js"
           fi
 
           if [ -n "${current}" ] && [ -e "${current}/.env" ]; then
