@@ -18,67 +18,76 @@ jobs:
       - name: Configure release server access
         env:
           SSH_PRIVATE_KEY: ${{ secrets.AXEIN_RELEASE_SSH_KEY }}
+          SITE_DEPLOY_KEY: ${{ secrets.AXEIN_SITE_DEPLOY_KEY }}
           SSH_HOST: ${{ secrets.AXEIN_RELEASE_SSH_HOST }}
         run: |
           set -euo pipefail
           test -n "${SSH_PRIVATE_KEY}" || { echo "AXEIN_RELEASE_SSH_KEY is not configured"; exit 1; }
+          test -n "${SITE_DEPLOY_KEY}" || { echo "AXEIN_SITE_DEPLOY_KEY is not configured"; exit 1; }
           test -n "${SSH_HOST}" || { echo "AXEIN_RELEASE_SSH_HOST is not configured"; exit 1; }
           install -d -m 700 ~/.ssh
           printf '%s\n' "${SSH_PRIVATE_KEY}" > ~/.ssh/axein_release
           chmod 600 ~/.ssh/axein_release
           ssh-keyscan -H "${SSH_HOST}" >> ~/.ssh/known_hosts
 
-      - name: Build and deploy current website source
-        env:
-          SSH_HOST: ${{ secrets.AXEIN_RELEASE_SSH_HOST }}
-          SOURCE_REF: ${{ inputs.source_ref }}
+      - name: Check out private axein.in source
+        uses: actions/checkout@v4
+        with:
+          repository: shaikhismail142/axein.in
+          ref: ${{ inputs.source_ref }}
+          ssh-key: ${{ secrets.AXEIN_SITE_DEPLOY_KEY }}
+          persist-credentials: false
+          path: site-source
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: site-source/platform/axein-modern/package-lock.json
+
+      - name: Build and validate website
+        working-directory: site-source/platform/axein-modern
         run: |
           set -euo pipefail
-          ssh -i ~/.ssh/axein_release "axein@${SSH_HOST}" \
-            "SOURCE_REF='${SOURCE_REF}' bash -s" <<'REMOTE_SCRIPT'
-          set -euo pipefail
-
-          source_repo=""
-          while IFS= read -r git_marker; do
-            candidate="${git_marker%/.git}"
-            remote_url="$(git -C "${candidate}" remote get-url origin 2>/dev/null || true)"
-            if printf '%s' "${remote_url}" | grep -qi 'shaikhismail142/axein\.in' \
-              && [ -f "${candidate}/platform/axein-modern/package-lock.json" ]; then
-              source_repo="${candidate}"
-              break
-            fi
-          done < <(find /srv/axein -maxdepth 6 \( -type d -o -type f \) -name .git 2>/dev/null | sort)
-
-          if [ -z "${source_repo}" ]; then
-            echo "Could not find an axein.in checkout with platform/axein-modern under /srv/axein." >&2
-            exit 1
-          fi
-
-          echo "Using website source: ${source_repo}"
-          git -C "${source_repo}" fetch origin "${SOURCE_REF}"
-          revision="$(git -C "${source_repo}" rev-parse FETCH_HEAD)"
-          release_id="$(date -u +%Y%m%d%H%M%S)-${revision:0:8}"
-          build_root="/srv/axein/site-builds/${release_id}"
-          build_source="${build_root}/source"
-          install -d "${build_root}"
-          git -C "${source_repo}" worktree add --detach "${build_source}" "${revision}"
-
-          cleanup_build() {
-            git -C "${source_repo}" worktree remove --force "${build_source}" >/dev/null 2>&1 || true
-          }
-          trap cleanup_build EXIT
-
-          frontend="${build_source}/platform/axein-modern"
-          test -f "${frontend}/package-lock.json"
-          cd "${frontend}"
-          command -v npm >/dev/null
           npm ci
           npm run typecheck
           npm run package:standalone
+          test -s dist/axein-modern-standalone.tgz
+
+      - name: Upload standalone website bundle
+        env:
+          SSH_HOST: ${{ secrets.AXEIN_RELEASE_SSH_HOST }}
+        run: |
+          set -euo pipefail
+          revision="$(git -C site-source rev-parse HEAD)"
+          staging="/srv/axein/site-staging/${GITHUB_RUN_ID}"
+          ssh -i ~/.ssh/axein_release "axein@${SSH_HOST}" "install -d -m 700 '${staging}'"
+          scp -i ~/.ssh/axein_release \
+            site-source/platform/axein-modern/dist/axein-modern-standalone.tgz \
+            "axein@${SSH_HOST}:${staging}/axein-modern-standalone.tgz"
+          printf 'revision=%s\n' "${revision}" >> "${GITHUB_ENV}"
+          printf 'staging=%s\n' "${staging}" >> "${GITHUB_ENV}"
+
+      - name: Deploy website with automatic rollback
+        env:
+          SSH_HOST: ${{ secrets.AXEIN_RELEASE_SSH_HOST }}
+        run: |
+          set -euo pipefail
+          ssh -i ~/.ssh/axein_release "axein@${SSH_HOST}" \
+            "REVISION='${revision}' STAGING='${staging}' bash -s" <<'REMOTE_SCRIPT'
+          set -euo pipefail
+
+          bundle="${STAGING}/axein-modern-standalone.tgz"
+          test -s "${bundle}"
+          release_id="$(date -u +%Y%m%d%H%M%S)-${REVISION:0:8}"
+          build_root="/srv/axein/site-builds/${release_id}"
+          install -d "${build_root}"
 
           service=""
           for candidate in axein-modern.service axein-frontend.service axein-control-room.service; do
-            if systemctl cat "${candidate}" >/dev/null 2>&1; then
+            exec_start="$(systemctl show "${candidate}" --property=ExecStart --value 2>/dev/null || true)"
+            if printf '%s' "${exec_start}" | grep -Eqi 'node|next'; then
               service="${candidate}"
               break
             fi
@@ -94,7 +103,8 @@ jobs:
           current="$(systemctl show "${service}" --property=WorkingDirectory --value)"
           release_dir="/srv/axein/site-releases/${release_id}"
           install -d "${release_dir}"
-          tar -xzf "${frontend}/dist/axein-modern-standalone.tgz" -C "${release_dir}"
+          tar -xzf "${bundle}" -C "${release_dir}"
+          test -s "${release_dir}/server.js"
 
           if [ -n "${current}" ] && [ -e "${current}/.env" ]; then
             cp "${current}/.env" "${release_dir}/.env"
@@ -139,7 +149,9 @@ jobs:
           ready=0
           for attempt in $(seq 1 20); do
             if sudo systemctl is-active --quiet "${service}" \
-              && curl -fsS --max-time 15 https://axein.in/axein-billing/handbook \
+              && curl -fsS --max-time 15 \
+                -H 'Cache-Control: no-cache' \
+                "https://axein.in/axein-billing/handbook?release=${REVISION:0:12}" \
                 | grep -q 'Axein Billing Pro Handbook'; then
               ready=1
               break
@@ -152,5 +164,7 @@ jobs:
             exit 1
           fi
 
-          echo "Website deployment completed through ${service} at revision ${revision}."
+          rm -f "${bundle}"
+          rmdir "${STAGING}" 2>/dev/null || true
+          echo "Website deployment completed through ${service} at revision ${REVISION}."
           REMOTE_SCRIPT
