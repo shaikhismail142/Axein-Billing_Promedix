@@ -24,6 +24,12 @@ function logLine(line: string) {
   } catch {}
 }
 
+function uploadsDirectory() {
+  return process.env.AXEIN_UPLOADS_DIR
+    ? path.resolve(process.env.AXEIN_UPLOADS_DIR)
+    : path.join(process.cwd(), 'public', 'uploads', 'logos');
+}
+
 function istStamp(d = new Date()) {
   const tz = 'Asia/Kolkata';
   const s = new Intl.DateTimeFormat('en-GB', {
@@ -157,7 +163,7 @@ export async function POST(req: NextRequest) {
       started_at: startedAt,
       app_tz: 'Asia/Kolkata',
       format: 'zip',
-      includes: ['db csv', 'invoice pdfs'],
+      includes: ['db csv', 'invoice pdfs', 'company logo files'],
     }, null, 2));
     archive.append(manifest, { name: 'manifest.json' });
 
@@ -194,7 +200,21 @@ export async function POST(req: NextRequest) {
     const settingsBuf = Buffer.from(JSON.stringify(settings, null, 2));
     archive.append(settingsBuf, { name: 'db/settings.json' });
 
-    // 4) Invoice PDFs (best effort)
+    // 4) Company logos and other local branding assets (best effort)
+    try {
+      const directory = uploadsDirectory();
+      const entries = await fs.promises.readdir(directory, { withFileTypes: true });
+      for (const entry of entries) {
+        if (!entry.isFile() || !/\.(png|jpe?g|webp)$/i.test(entry.name)) continue;
+        archive.file(path.join(directory, entry.name), {
+          name: `uploads/logos/${path.basename(entry.name)}`,
+        });
+      }
+    } catch (e: any) {
+      if (e?.code !== 'ENOENT') logLine(`backup: logo files failed (${e?.message || e})`);
+    }
+
+    // 5) Invoice PDFs (best effort)
     const { rows: saleIds } = await pool.query('SELECT id FROM sales ORDER BY id');
     for (const r of saleIds as Array<{ id: string }>) {
       try {
@@ -205,7 +225,7 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    // 5) Finalize & wait
+    // 6) Finalize & wait
     await archive.finalize();
     await done;
 

@@ -27,6 +27,12 @@ function logLine(line: string) {
   } catch {}
 }
 
+function uploadsDirectory() {
+  return process.env.AXEIN_UPLOADS_DIR
+    ? path.resolve(process.env.AXEIN_UPLOADS_DIR)
+    : path.join(process.cwd(), 'public', 'uploads', 'logos');
+}
+
 type PgLike = {
   query: (text: string, params?: any[]) => Promise<{ rows: any[] }>;
   connect?: () => Promise<{
@@ -431,6 +437,9 @@ export async function POST(req: NextRequest) {
     const hasSettings  = await has('db/settings.json');
 
     const invoicesPdfCount = [...entries.keys()].filter((n) => n.startsWith('invoices/') && n.endsWith('.pdf')).length;
+    const logoEntries = [...entries.entries()].filter(([name]) =>
+      /^uploads\/logos\/[^/]+\.(png|jpe?g|webp)$/i.test(name)
+    );
 
     const report = {
       hasManifest,
@@ -451,6 +460,7 @@ export async function POST(req: NextRequest) {
       hasNotifications,
       hasSettings,
       invoicesPdfCount,
+      logoFilesCount: logoEntries.length,
     };
 
     if (!apply) {
@@ -785,7 +795,27 @@ export async function POST(req: NextRequest) {
       }
 
       await client.query('COMMIT');
-      return Response.json({ ok: true, applied: true, report });
+
+      let restoredLogoFiles = 0;
+      if (logoEntries.length) {
+        const directory = uploadsDirectory();
+        await fs.promises.mkdir(directory, { recursive: true });
+        for (const [archiveName, content] of logoEntries) {
+          const filename = path.basename(archiveName);
+          if (!/^logo_[a-zA-Z0-9_.-]+\.(png|jpe?g|webp)$/i.test(filename)) continue;
+          await fs.promises.writeFile(
+            path.join(directory, filename),
+            new Uint8Array(content)
+          );
+          restoredLogoFiles++;
+        }
+      }
+
+      return Response.json({
+        ok: true,
+        applied: true,
+        report: { ...report, restoredLogoFiles },
+      });
     } catch (e: any) {
       try { await client.query('ROLLBACK'); } catch {}
       logLine(`restore failed: ${e.message}`);

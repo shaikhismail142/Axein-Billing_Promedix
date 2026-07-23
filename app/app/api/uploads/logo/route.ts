@@ -80,7 +80,9 @@ export async function POST(req: Request) {
     const ext = (byMime || byName || "png").toLowerCase();
 
     // Ensure upload dir exists
-    const dir = path.join(process.cwd(), "public", "uploads", "logos");
+    const dir = process.env.AXEIN_UPLOADS_DIR
+      ? path.resolve(process.env.AXEIN_UPLOADS_DIR)
+      : path.join(process.cwd(), "public", "uploads", "logos");
     await mkdir(dir, { recursive: true });
 
     // Generate unique filename & write
@@ -91,8 +93,9 @@ export async function POST(req: Request) {
     const u8 = new Uint8Array(ab);
     await writeFile(filepath, u8);
 
-    // Public URL (served by Next static from /public)
-    const url = `/uploads/logos/${filename}`;
+    const url = process.env.AXEIN_UPLOADS_DIR
+      ? `/api/uploads/logo/${encodeURIComponent(filename)}`
+      : `/uploads/logos/${filename}`;
 
     return NextResponse.json({ url }, { status: 200 });
   } catch (err: any) {

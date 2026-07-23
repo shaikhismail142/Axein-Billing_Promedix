@@ -1,31 +1,82 @@
 # AxEin Billing Desktop
 
-The Windows and macOS applications are a secure Electron shell around the same
-Dockerized AxEin web application. Browser and desktop access therefore use the
-same PostgreSQL data and the same application image.
+AxEin Billing for Windows and macOS packages the current Next.js application
+with a private Node.js runtime and a persistent PGlite database. Customers do
+not need Docker, PostgreSQL, Redis, MinIO, Node.js, Git, or source code.
 
-## Requirements
+## Customer requirements
 
-- Windows 10/11 64-bit or macOS 12+
-- Docker Desktop installed and running
-- Internet access for the first image download
+- Windows 10/11 64-bit, or macOS 11+
+- 4 GB RAM minimum, 8 GB recommended
+- 2 GB free disk space
+- Internet access for download and first-device activation
 
-The desktop app creates an `axein-desktop` Compose project with persistent named
-volumes. Services use `restart: unless-stopped`, and the desktop launcher is set
-to open at login so the local app is restored after a restart.
+The application server listens only on `127.0.0.1`. Billing data is stored under
+the operating system's per-user AxEin Billing data directory and remains across
+application upgrades and computer restarts.
 
-The first launch downloads the matching `linux/amd64` or `linux/arm64` image
-archive from the public GitHub release and loads it into Docker Desktop. No
-container-registry account, GHCR token, or source-code build is required.
+## Build requirements
 
-## Local packaging
+- Node.js 20 LTS
+- npm
+- Windows packages must be built on Windows
+- Intel macOS packages must be built on an Intel macOS runner
+- Apple Silicon packages must be built on an arm64 macOS runner
+
+## Validate the embedded runtime
+
+From the application root:
 
 ```bash
-cd app/desktop
 npm ci
-npm run dist:win
-npm run dist:mac
+npm run desktop:web:build
+npm run desktop:prepare-runtime
+npm run desktop:runtime:smoke
 ```
 
-Windows packages must be built on Windows and macOS packages on macOS. The
-release workflow performs both builds automatically.
+The smoke test uses a temporary embedded database and verifies products,
+categories, Quick Billing, partial payments, invoices, quotations, purchases,
+inventory, accounting, alerts, tax reports, PDFs, and the primary application
+pages.
+
+## Build installers
+
+Install the desktop packager once:
+
+```bash
+cd desktop
+npm ci
+```
+
+Windows:
+
+```bash
+npm run dist:win
+```
+
+macOS Apple Silicon:
+
+```bash
+npm run dist:mac:arm64
+```
+
+macOS Intel:
+
+```bash
+npm run dist:mac:x64
+```
+
+Generated installers are written to `desktop/dist/`.
+
+## Runtime contents
+
+`npm run desktop:runtime` generates `desktop/runtime/` with:
+
+- the current Next.js standalone production server;
+- public and static application assets;
+- every current database migration;
+- the embedded PGlite engine;
+- a platform-native Node.js 20 runtime;
+- public license verification metadata only.
+
+The private license signing key is never copied into customer installers.

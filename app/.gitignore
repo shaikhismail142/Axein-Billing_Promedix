@@ -30,3 +30,4 @@ logs/
 tsconfig.tsbuildinfo
 tools/license-keygen/ed25519-private.pem
 tools/license-keygen/licenses/
+desktop/runtime/

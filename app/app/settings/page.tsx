@@ -748,6 +748,7 @@ export default function SettingsPage() {
               <li>db/notifications.csv: {restoreReport.hasNotifications ? '✅' : '❌'}</li>
               <li>db/settings.json: {restoreReport.hasSettings ? '✅' : '❌'}</li>
               <li>invoice PDFs: {restoreReport.invoicesPdfCount}</li>
+              <li>company logo files: {restoreReport.logoFilesCount ?? 0}</li>
             </ul>
           </div>
         )}

@@ -1,14 +1,17 @@
 {
   "name": "axein-billing-desktop",
-  "version": "1.3.0",
+  "version": "1.4.0",
   "private": true,
   "description": "AxEin Billing desktop launcher for Windows and macOS",
   "main": "main.cjs",
   "scripts": {
     "start": "electron .",
+    "prepare:runtime": "npm --prefix .. run desktop:runtime",
     "dist": "electron-builder --publish never",
-    "dist:win": "electron-builder --win nsis --x64 --publish never",
-    "dist:mac": "electron-builder --mac --publish never"
+    "dist:win": "npm run prepare:runtime && electron-builder --win nsis --x64 --publish never",
+    "dist:mac": "npm run prepare:runtime && electron-builder --mac --publish never",
+    "dist:mac:x64": "npm run prepare:runtime && electron-builder --mac --x64 --publish never",
+    "dist:mac:arm64": "npm run prepare:runtime && electron-builder --mac --arm64 --publish never"
   },
   "devDependencies": {
     "electron": "^43.1.1",
@@ -31,9 +34,9 @@
     ],
     "extraResources": [
       {
-        "from": "../db/migrations",
-        "to": "migrations",
-        "filter": ["**/*.sql"]
+        "from": "runtime",
+        "to": "runtime",
+        "filter": ["**/*"]
       }
     ],
     "directories": {
@@ -53,10 +56,8 @@
     "mac": {
       "icon": "build/icon.png",
       "category": "public.app-category.business",
-      "target": [
-        { "target": "dmg", "arch": ["x64", "arm64"] },
-        { "target": "zip", "arch": ["x64", "arm64"] }
-      ]
+      "minimumSystemVersion": "11.0",
+      "target": ["dmg", "zip"]
     }
   }
 }

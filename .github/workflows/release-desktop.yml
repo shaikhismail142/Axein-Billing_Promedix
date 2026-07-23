@@ -9,14 +9,13 @@ on:
       release_tag:
         description: GitHub release tag
         required: true
-        default: v1.3.0
+        default: v1.4.0
 
 permissions:
   contents: write
 
 env:
-  LOCAL_IMAGE_NAME: axein-billing-promedix
-  APP_VERSION: 1.3.0
+  APP_VERSION: 1.4.0
   RELEASE_TAG: ${{ inputs.release_tag || github.ref_name }}
 
 jobs:
@@ -36,40 +35,6 @@ jobs:
         working-directory: app
         run: npm run build
 
-  container:
-    runs-on: ${{ matrix.runner }}
-    needs: web-build
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - platform: linux/amd64
-            architecture: amd64
-            runner: ubuntu-latest
-          - platform: linux/arm64
-            architecture: arm64
-            runner: ubuntu-24.04-arm
-    steps:
-      - uses: actions/checkout@v4
-      - uses: docker/setup-buildx-action@v3
-      - name: Build portable application image
-        uses: docker/build-push-action@v6
-        with:
-          context: ./app
-          file: ./app/Dockerfile
-          platforms: ${{ matrix.platform }}
-          tags: ${{ env.LOCAL_IMAGE_NAME }}:${{ env.APP_VERSION }}
-          outputs: type=docker,dest=${{ runner.temp }}/AxEin-Billing-Image-linux-${{ matrix.architecture }}.tar
-          cache-from: type=gha,scope=image-${{ matrix.architecture }}
-          cache-to: type=gha,mode=max,scope=image-${{ matrix.architecture }}
-      - name: Compress application image
-        run: gzip -9 "${{ runner.temp }}/AxEin-Billing-Image-linux-${{ matrix.architecture }}.tar"
-      - uses: actions/upload-artifact@v4
-        with:
-          name: container-image-${{ matrix.architecture }}
-          path: ${{ runner.temp }}/AxEin-Billing-Image-linux-${{ matrix.architecture }}.tar.gz
-          if-no-files-found: error
-
   windows:
     runs-on: windows-latest
     needs: web-build
@@ -79,13 +44,25 @@ jobs:
         with:
           node-version: 20
           cache: npm
-          cache-dependency-path: app/desktop/package-lock.json
+          cache-dependency-path: |
+            app/package-lock.json
+            app/desktop/package-lock.json
+      - name: Install application dependencies
+        working-directory: app
+        run: npm ci
       - name: Install desktop dependencies
         working-directory: app/desktop
         run: npm ci
+      - name: Build and verify embedded application runtime
+        working-directory: app
+        run: |
+          npm run desktop:web:build
+          npm run desktop:prepare-runtime
+          npm run desktop:runtime:smoke
+          npm run desktop:bundle-node
       - name: Build Windows installer
         working-directory: app/desktop
-        run: npm run dist:win
+        run: npx electron-builder --win nsis --x64 --publish never
       - uses: actions/upload-artifact@v4
         with:
           name: windows-installers
@@ -93,26 +70,46 @@ jobs:
           if-no-files-found: error
 
   macos:
-    runs-on: macos-latest
+    runs-on: ${{ matrix.runner }}
     needs: web-build
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - architecture: x64
+            runner: macos-15-intel
+          - architecture: arm64
+            runner: macos-15
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: 20
           cache: npm
-          cache-dependency-path: app/desktop/package-lock.json
+          cache-dependency-path: |
+            app/package-lock.json
+            app/desktop/package-lock.json
+      - name: Install application dependencies
+        working-directory: app
+        run: npm ci
       - name: Install desktop dependencies
         working-directory: app/desktop
         run: npm ci
+      - name: Build and verify embedded application runtime
+        working-directory: app
+        run: |
+          npm run desktop:web:build
+          npm run desktop:prepare-runtime
+          npm run desktop:runtime:smoke
+          npm run desktop:bundle-node
       - name: Build macOS installers
         working-directory: app/desktop
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: "false"
-        run: npm run dist:mac
+        run: npx electron-builder --mac --${{ matrix.architecture }} --publish never
       - uses: actions/upload-artifact@v4
         with:
-          name: macos-installers
+          name: macos-installer-${{ matrix.architecture }}
           path: |
             app/desktop/dist/*.dmg
             app/desktop/dist/*.zip
@@ -120,7 +117,7 @@ jobs:
 
   release:
     runs-on: ubuntu-latest
-    needs: [container, windows, macos]
+    needs: [windows, macos]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
@@ -128,9 +125,8 @@ jobs:
           path: release
           merge-multiple: true
           pattern: "!*.dockerbuild"
-      - name: Add Windows bootstrap and checksums
+      - name: Add checksums
         run: |
-          cp app/axein-windows-bundle/axein-bootstrap.py release/AxEin-Windows-Bootstrap.py
           cd release
           sha256sum * > SHA256SUMS.txt
           ls -lah
@@ -157,6 +153,7 @@ jobs:
             local file="$1"
             local platform="$2"
             local architecture="$3"
+            local requirements="$4"
             local name
             name="$(basename "$file")"
             echo "Publishing ${name} for ${platform}/${architecture}"
@@ -169,18 +166,18 @@ jobs:
                 --release-version '${APP_VERSION}' \
                 --platform '${platform}' \
                 --architecture '${architecture}' \
-                --requirements 'Docker Desktop 4.30 or newer; 8 GB RAM recommended; 10 GB free disk space.' \
-                --release-notes 'Portal-managed single-device activation, customer downloads, billing history, and licensing improvements.'"
+                --requirements '${requirements}' \
+                --release-notes 'Docker-free native installer with embedded database, portal-managed single-device activation, healthcare billing, inventory, accounting, GST reports, customer debt, quotations, backups, and the complete AxEin Billing feature set.'"
           }
 
           shopt -s nullglob
           for file in release/*.exe; do
-            register_artifact "$file" windows x64
+            register_artifact "$file" windows x64 "Windows 10/11 64-bit; 4 GB RAM minimum; 8 GB recommended; 2 GB free disk space; no Docker required."
           done
           for file in release/*.dmg; do
             case "$(basename "$file")" in
-              *arm64*) register_artifact "$file" macos arm64 ;;
-              *x64*|*intel*) register_artifact "$file" macos x64 ;;
+              *arm64*) register_artifact "$file" macos arm64 "macOS 11 or newer on Apple Silicon; 4 GB RAM minimum; 8 GB recommended; 2 GB free disk space; no Docker required." ;;
+              *x64*|*intel*) register_artifact "$file" macos x64 "macOS 11 or newer on an Intel Mac; 4 GB RAM minimum; 8 GB recommended; 2 GB free disk space; no Docker required." ;;
             esac
           done
           ssh -i ~/.ssh/axein_release "axein@${SSH_HOST}" \
@@ -194,7 +191,7 @@ jobs:
             gh release upload "$TAG" release/* --clobber
           else
             gh release create "$TAG" release/* \
-              --title "AxEin Billing 1.3.0" \
+              --title "AxEin Billing 1.4.0" \
               --generate-notes \
-              --notes "Windows and macOS desktop installers use portal-managed, single-device activation. The first launch downloads the matching application image from this release; no GHCR login is required. Docker Desktop is required. Unsigned installers may show an operating-system security prompt."
+              --notes "Windows and macOS installers now contain the complete AxEin Billing application and a private embedded database. Docker Desktop, Node.js, PostgreSQL, Redis, MinIO, Git, GHCR credentials, and source builds are not required. Customer data persists locally across upgrades. Portal-managed single-device activation remains enabled. Unsigned installers may show an operating-system security prompt."
           fi

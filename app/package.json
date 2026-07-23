@@ -6,10 +6,17 @@
     "dev": "node ./node_modules/next/dist/bin/next dev -p 3000",
     "build": "node ./node_modules/next/dist/bin/next build",
     "start": "node ./node_modules/next/dist/bin/next start -p 3000",
-    "lint": "node ./node_modules/next/dist/bin/next lint"
+    "lint": "node ./node_modules/next/dist/bin/next lint",
+    "desktop:web:build": "node ./desktop/scripts/run-next-build.mjs",
+    "desktop:prepare-runtime": "node ./desktop/scripts/prepare-runtime.mjs",
+    "desktop:bundle-node": "node ./desktop/scripts/prepare-node-runtime.mjs",
+    "desktop:runtime:start": "node ./desktop/scripts/run-local-runtime.mjs",
+    "desktop:runtime:smoke": "node ./desktop/scripts/smoke-test-runtime.mjs",
+    "desktop:runtime": "npm run desktop:web:build && npm run desktop:prepare-runtime && npm run desktop:bundle-node"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.637.0",
+    "@electric-sql/pglite": "^0.3.15",
     "@pdf-lib/fontkit": "^1.1.1",
     "archiver": "^6.0.2",
     "archiver-zip-encrypted": "^1.0.11",
