@@ -110,13 +110,14 @@ jobs:
           restart_policy="$(systemctl show "${service}" --property=Restart --value)"
           test -n "${current}"
           echo "Deploying ${service}; user=${service_user:-system}; workdir=${current}; restart=${restart_policy}; sudo=${can_sudo}"
+          echo "Service command: ${exec_start}"
 
           release_dir="/srv/axein/site-releases/${release_id}"
           install -d "${release_dir}"
           tar -xzf "${bundle}" -C "${release_dir}"
           test -s "${release_dir}/server.js"
 
-          if printf '%s' "${exec_start}" | grep -q '/.next/standalone/server.js'; then
+          if printf '%s' "${exec_start}" | grep -Fq '.next/standalone/server.js'; then
             mkdir -p "${release_dir}/.next"
             ln -sfn ../.. "${release_dir}/.next/standalone"
           fi
@@ -151,8 +152,19 @@ jobs:
             fi
 
             old_pid="$(systemctl show "${service}" --property=MainPID --value)"
-            if [ "${old_pid:-0}" -le 1 ] || [ "${restart_policy}" = "no" ]; then
+            if [ "${restart_policy}" = "no" ]; then
               echo "Cannot restart ${service} without passwordless sudo or a systemd restart policy." >&2
+              return 1
+            fi
+            if [ "${old_pid:-0}" -le 1 ]; then
+              for attempt in $(seq 1 30); do
+                new_pid="$(systemctl show "${service}" --property=MainPID --value)"
+                if systemctl is-active --quiet "${service}" && [ "${new_pid:-0}" -gt 1 ]; then
+                  return
+                fi
+                sleep 1
+              done
+              echo "Systemd did not automatically recover ${service}." >&2
               return 1
             fi
             kill -TERM "${old_pid}"
@@ -222,6 +234,7 @@ jobs:
           fi
 
           if ! restart_service; then
+            journalctl -u "${service}" -n 100 --no-pager || true
             rollback_service
             exit 1
           fi
