@@ -96,15 +96,30 @@ jobs:
             echo "No supported Axein Next.js service was found." >&2
             exit 1
           fi
-          sudo -n true
+
+          can_sudo=0
+          if sudo -n true 2>/dev/null; then
+            can_sudo=1
+          fi
           node_bin="$(command -v node)"
           test -x "${node_bin}"
 
           current="$(systemctl show "${service}" --property=WorkingDirectory --value)"
+          exec_start="$(systemctl show "${service}" --property=ExecStart --value)"
+          service_user="$(systemctl show "${service}" --property=User --value)"
+          restart_policy="$(systemctl show "${service}" --property=Restart --value)"
+          test -n "${current}"
+          echo "Deploying ${service}; user=${service_user:-system}; workdir=${current}; restart=${restart_policy}; sudo=${can_sudo}"
+
           release_dir="/srv/axein/site-releases/${release_id}"
           install -d "${release_dir}"
           tar -xzf "${bundle}" -C "${release_dir}"
           test -s "${release_dir}/server.js"
+
+          if printf '%s' "${exec_start}" | grep -q '/.next/standalone/server.js'; then
+            mkdir -p "${release_dir}/.next"
+            ln -sfn ../.. "${release_dir}/.next/standalone"
+          fi
 
           if [ -n "${current}" ] && [ -e "${current}/.env" ]; then
             cp "${current}/.env" "${release_dir}/.env"
@@ -117,38 +132,103 @@ jobs:
           override="${dropin_dir}/axein-release.conf"
           previous_override="${build_root}/previous-axein-release.conf"
           had_override=0
-          if sudo test -f "${override}"; then
+          if [ "${can_sudo}" -eq 1 ] && sudo test -f "${override}"; then
             sudo cat "${override}" > "${previous_override}"
             had_override=1
           fi
 
-          rollback_service() {
-            echo "Deployment check failed. Restoring the previous service configuration." >&2
-            if [ "${had_override}" -eq 1 ]; then
-              sudo install -D -m 644 "${previous_override}" "${override}"
-            else
-              sudo rm -f "${override}"
+          swap_mode=""
+          previous_target=""
+          rollback_dir=""
+
+          restart_service() {
+            if [ "${can_sudo}" -eq 1 ]; then
+              sudo systemctl restart "${service}"
+              return
             fi
-            sudo systemctl daemon-reload
-            sudo systemctl restart "${service}" || true
+            if systemctl restart "${service}" >/dev/null 2>&1; then
+              return
+            fi
+
+            old_pid="$(systemctl show "${service}" --property=MainPID --value)"
+            if [ "${old_pid:-0}" -le 1 ] || [ "${restart_policy}" = "no" ]; then
+              echo "Cannot restart ${service} without passwordless sudo or a systemd restart policy." >&2
+              return 1
+            fi
+            kill -TERM "${old_pid}"
+            for attempt in $(seq 1 20); do
+              new_pid="$(systemctl show "${service}" --property=MainPID --value)"
+              if systemctl is-active --quiet "${service}" \
+                && [ "${new_pid:-0}" -gt 1 ] \
+                && [ "${new_pid}" != "${old_pid}" ]; then
+                return
+              fi
+              sleep 1
+            done
+            return 1
           }
 
-          {
-            printf '[Service]\n'
-            printf 'WorkingDirectory=%s\n' "${release_dir}"
-            printf 'ExecStart=\n'
-            printf 'ExecStart=%s %s/server.js\n' "${node_bin}" "${release_dir}"
-          } > "${build_root}/axein-release.conf"
-          sudo install -D -m 644 "${build_root}/axein-release.conf" "${override}"
-          sudo systemctl daemon-reload
-          if ! sudo systemctl restart "${service}"; then
+          rollback_service() {
+            echo "Deployment check failed. Restoring the previous service configuration." >&2
+            case "${swap_mode}" in
+              dropin)
+                if [ "${had_override}" -eq 1 ]; then
+                  sudo install -D -m 644 "${previous_override}" "${override}"
+                else
+                  sudo rm -f "${override}"
+                fi
+                sudo systemctl daemon-reload
+                ;;
+              symlink)
+                ln -sfn "${previous_target}" "${current}"
+                ;;
+              directory)
+                unlink "${current}"
+                mv "${rollback_dir}" "${current}"
+                ;;
+            esac
+            restart_service || true
+          }
+
+          if [ "${can_sudo}" -eq 1 ]; then
+            {
+              printf '[Service]\n'
+              printf 'WorkingDirectory=%s\n' "${release_dir}"
+              printf 'ExecStart=\n'
+              printf 'ExecStart=%s %s/server.js\n' "${node_bin}" "${release_dir}"
+            } > "${build_root}/axein-release.conf"
+            sudo install -D -m 644 "${build_root}/axein-release.conf" "${override}"
+            sudo systemctl daemon-reload
+            swap_mode="dropin"
+          else
+            current_parent="$(dirname "${current}")"
+            test -w "${current_parent}" || {
+              echo "The deployment user cannot update ${current_parent} and has no passwordless sudo." >&2
+              exit 1
+            }
+            if [ -L "${current}" ]; then
+              previous_target="$(readlink "${current}")"
+              ln -sfn "${release_dir}" "${current}"
+              swap_mode="symlink"
+            elif [ -d "${current}" ]; then
+              rollback_dir="${current}.rollback-${release_id}"
+              mv "${current}" "${rollback_dir}"
+              ln -s "${release_dir}" "${current}"
+              swap_mode="directory"
+            else
+              echo "WorkingDirectory is neither a symlink nor a directory: ${current}" >&2
+              exit 1
+            fi
+          fi
+
+          if ! restart_service; then
             rollback_service
             exit 1
           fi
 
           ready=0
           for attempt in $(seq 1 20); do
-            if sudo systemctl is-active --quiet "${service}" \
+            if systemctl is-active --quiet "${service}" \
               && curl -fsS --max-time 15 \
                 -H 'Cache-Control: no-cache' \
                 "https://axein.in/axein-billing/handbook?release=${REVISION:0:12}" \
@@ -159,9 +239,30 @@ jobs:
             sleep 3
           done
           if [ "${ready}" -ne 1 ]; then
-            sudo journalctl -u "${service}" -n 100 --no-pager || true
+            journalctl -u "${service}" -n 100 --no-pager || true
             rollback_service
             exit 1
+          fi
+
+          if [ -x /srv/axein/app/.venv/bin/python ] && [ -f /srv/axein/app/manage.py ]; then
+            BILLING_PRIVATE_DOWNLOAD_ROOT=/srv/axein/private-downloads \
+              /srv/axein/app/.venv/bin/python /srv/axein/app/manage.py shell <<'PYTHON'
+          from billing_portal.models import BillingRelease
+
+          pairs = BillingRelease.objects.filter(is_active=True).values_list(
+              "edition_id", "platform", "architecture"
+          ).distinct()
+          for edition_id, platform, architecture in pairs:
+              releases = BillingRelease.objects.filter(
+                  edition_id=edition_id,
+                  platform=platform,
+                  architecture=architecture,
+                  is_active=True,
+              ).order_by("-published_at", "-id")
+              latest = releases.first()
+              if latest:
+                  releases.exclude(pk=latest.pk).update(is_active=False)
+          PYTHON
           fi
 
           rm -f "${bundle}"
