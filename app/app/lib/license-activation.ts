@@ -11,7 +11,7 @@ export type LicensePayload = {
 };
 
 export type ActivationRecord = {
-  mode: "active" | "trial" | "inactive";
+  mode: "active" | "trial" | "read_only" | "inactive";
   ok: boolean;
   reason?: string | null;
 
@@ -22,8 +22,32 @@ export type ActivationRecord = {
   trial_allowed?: boolean;
   trial_started_at?: string | null;
   trial_expires_at?: string | null;
+  source?: "legacy" | "portal" | null;
+  portal_certificate?: PortalCertificate | null;
+  portal_last_validated_at?: string | null;
+  read_only?: boolean;
 
   updated_at: string;
+};
+
+export type PortalCertificate = {
+  alg: "Ed25519";
+  kid: string;
+  payload: {
+    schema: "axein.billing.activation.v1";
+    license_id: string;
+    customer_id: number;
+    company_id: number;
+    product: string;
+    edition: string;
+    device_hash: string;
+    valid_from: string;
+    valid_until: string;
+    issued_at: string;
+    lease_expires_at: string;
+    nonce: string;
+  };
+  signature: string;
 };
 
 const NOW_ISO = () => new Date().toISOString();
@@ -36,6 +60,10 @@ const DEFAULTS: ActivationRecord = {
   trial_allowed: true,
   trial_started_at: null,
   trial_expires_at: null,
+  source: null,
+  portal_certificate: null,
+  portal_last_validated_at: null,
+  read_only: false,
   updated_at: NOW_ISO(),
 };
 
@@ -123,6 +151,127 @@ export function verifySignatureEd25519(
   );
 }
 
+function stableJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(stableJson).join(",")}]`;
+  if (value && typeof value === "object") {
+    return `{${Object.entries(value as Record<string, unknown>)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([key, item]) => `${JSON.stringify(key)}:${stableJson(item)}`)
+      .join(",")}}`;
+  }
+  return JSON.stringify(value);
+}
+
+function portalPublicKeys(): Record<string, string> {
+  const configured = process.env.LICENSE_PUBKEYS_JSON?.trim();
+  if (configured) {
+    try {
+      const parsed = JSON.parse(configured);
+      if (parsed && typeof parsed === "object") return parsed;
+    } catch {
+      throw new Error("LICENSE_PUBKEYS_JSON is invalid.");
+    }
+  }
+  const legacy = process.env.LICENSE_PUBLIC_KEY?.trim();
+  return legacy ? { "axein-2026-01": legacy } : {};
+}
+
+export function verifyPortalCertificate(
+  certificate: PortalCertificate,
+  expectedDeviceHash = process.env.AXEIN_DEVICE_HASH || ""
+): PortalCertificate {
+  if (!certificate || certificate.alg !== "Ed25519" || !certificate.kid) {
+    throw new Error("Portal activation certificate format is invalid.");
+  }
+  if (certificate.payload?.schema !== "axein.billing.activation.v1") {
+    throw new Error("Portal activation certificate schema is unsupported.");
+  }
+  if (expectedDeviceHash && certificate.payload.device_hash !== expectedDeviceHash) {
+    throw new Error("This activation certificate belongs to another computer.");
+  }
+  const publicKeyBase64 = portalPublicKeys()[certificate.kid];
+  if (!publicKeyBase64) throw new Error(`No public key is configured for ${certificate.kid}.`);
+  const publicKey = crypto.createPublicKey({
+    key: Buffer.from(publicKeyBase64, "base64"),
+    format: "der",
+    type: "spki",
+  });
+  const signature = Buffer.from(
+    certificate.signature.replace(/-/g, "+").replace(/_/g, "/"),
+    "base64"
+  );
+  const ok = crypto.verify(
+    null,
+    new TextEncoder().encode(stableJson(certificate.payload)),
+    publicKey,
+    Uint8Array.from(signature)
+  );
+  if (!ok) throw new Error("Portal activation certificate signature is invalid.");
+  const today = new Date().toISOString().slice(0, 10);
+  if (today < certificate.payload.valid_from || today > certificate.payload.valid_until) {
+    throw new Error("Portal license is outside its validity period.");
+  }
+  return certificate;
+}
+
+export async function savePortalCertificate(
+  certificate: PortalCertificate,
+  deviceHash: string
+): Promise<ActivationRecord> {
+  const verified = verifyPortalCertificate(certificate, deviceHash);
+  return saveActivationRecord({
+    mode: "active",
+    ok: true,
+    reason: null,
+    source: "portal",
+    portal_certificate: verified,
+    portal_last_validated_at: NOW_ISO(),
+    read_only: false,
+    license: {
+      license_key: verified.payload.license_id,
+      email: "",
+      expires_at: `${verified.payload.valid_until}T23:59:59.999Z`,
+    },
+  });
+}
+
+async function refreshPortalCertificate(record: ActivationRecord): Promise<ActivationRecord> {
+  const certificate = record.portal_certificate;
+  if (!certificate) return record;
+  const last = Date.parse(record.portal_last_validated_at || certificate.payload.issued_at);
+  if (Number.isFinite(last) && Date.now() - last < 24 * 60 * 60 * 1000) return record;
+  const origin = (process.env.AXEIN_LICENSE_PORTAL_URL || "https://axein.in").replace(/\/+$/, "");
+  try {
+    const response = await fetch(`${origin}/api/v1/billing/activation/validate/`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      body: JSON.stringify({
+        licenseId: certificate.payload.license_id,
+        deviceHash: certificate.payload.device_hash,
+        certificateSignature: certificate.signature,
+      }),
+      cache: "no-store",
+      signal: AbortSignal.timeout(12_000),
+    });
+    const body = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      if (response.status >= 400 && response.status < 500) {
+        return saveActivationRecord({
+          mode: "read_only",
+          ok: false,
+          read_only: true,
+          reason: body?.error || "The central license service rejected this activation.",
+        });
+      }
+      throw new Error(body?.error || "The central license service is temporarily unavailable.");
+    }
+    if (!body?.certificate) throw new Error("Validation response did not include a certificate.");
+    return savePortalCertificate(body.certificate, certificate.payload.device_hash);
+  } catch {
+    return record;
+  }
+}
+
 /** Load the current activation record (normalized), or null if nothing persisted yet. */
 export async function getActivationRecord(): Promise<ActivationRecord | null> {
   const client = await pool.connect();
@@ -207,14 +356,16 @@ export async function saveActivationRecord(patch: Partial<ActivationRecord>): Pr
 /** Normalize activation into a light-weight status */
 export async function getActivationStatus(): Promise<{
   isLicensed: boolean;
-  mode: "active" | "trial" | "inactive";
+  mode: "active" | "trial" | "read_only" | "inactive";
   trialActive: boolean;
   canStartTrial: boolean;
   daysLeft: number | null;
   expiresAt: string | null;
+  readOnly?: boolean;
+  source?: "legacy" | "portal" | null;
   reason?: string | null;
 }> {
-  const a = await getActivationRecord();
+  let a = await getActivationRecord();
   if (!a) {
     return {
       isLicensed: false,
@@ -225,6 +376,50 @@ export async function getActivationStatus(): Promise<{
       expiresAt: null,
       reason: "No activation record",
     };
+  }
+
+  if (a.source === "portal" && a.portal_certificate) {
+    try {
+      verifyPortalCertificate(a.portal_certificate);
+      a = await refreshPortalCertificate(a);
+      const leaseExpires = Date.parse(a.portal_certificate?.payload.lease_expires_at || "");
+      const readOnly =
+        a.read_only === true ||
+        !Number.isFinite(leaseExpires) ||
+        Date.now() > leaseExpires;
+      const expiresAt = `${a.portal_certificate.payload.valid_until}T23:59:59.999Z`;
+      if (a.read_only !== readOnly || a.mode !== (readOnly ? "read_only" : "active")) {
+        a = await saveActivationRecord({
+          mode: readOnly ? "read_only" : "active",
+          ok: !readOnly,
+          read_only: readOnly,
+          reason: readOnly ? "Connect to the internet to refresh the seven-day offline lease." : null,
+        });
+      }
+      return {
+        isLicensed: true,
+        mode: readOnly ? "read_only" : "active",
+        trialActive: false,
+        canStartTrial: false,
+        daysLeft: Math.max(0, Math.ceil((Date.parse(expiresAt) - Date.now()) / 86400000)),
+        expiresAt,
+        readOnly,
+        source: "portal",
+        reason: a.reason ?? null,
+      };
+    } catch (error: any) {
+      return {
+        isLicensed: false,
+        mode: "inactive",
+        trialActive: false,
+        canStartTrial: false,
+        daysLeft: 0,
+        expiresAt: a.portal_certificate.payload.valid_until,
+        readOnly: true,
+        source: "portal",
+        reason: error?.message || "Portal activation is invalid.",
+      };
+    }
   }
 
   const mode = a.mode ?? "inactive";
@@ -249,6 +444,8 @@ export async function getActivationStatus(): Promise<{
     canStartTrial,
     daysLeft,
     expiresAt,
+    readOnly: false,
+    source: a.source ?? "legacy",
     reason: a.reason ?? null,
   };
 }

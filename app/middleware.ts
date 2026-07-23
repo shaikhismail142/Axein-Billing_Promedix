@@ -6,6 +6,27 @@ const NO_STORE_HEADERS = {
   "cache-control": "no-store",
 };
 
+function isSafeReadOnlyOperation(pathname: string) {
+  return (
+    pathname.startsWith("/api/license") ||
+    pathname.startsWith("/api/admin/backup") ||
+    pathname.includes("/print") ||
+    pathname.includes("/pdf") ||
+    pathname.includes("/export")
+  );
+}
+
+function licenseUnavailableResponse() {
+  return NextResponse.json(
+    {
+      ok: false,
+      code: "LICENSE_STATUS_UNAVAILABLE",
+      error: "License status is temporarily unavailable. Viewing remains available, but changes are paused.",
+    },
+    { status: 503 }
+  );
+}
+
 export async function middleware(req: NextRequest) {
   const { pathname } = req.nextUrl;
 
@@ -44,10 +65,30 @@ export async function middleware(req: NextRequest) {
       headers: NO_STORE_HEADERS as any,
     });
 
-    if (!licRes.ok) return NextResponse.next();
+    if (!licRes.ok) {
+      if (
+        ["GET", "HEAD", "OPTIONS"].includes(req.method) ||
+        isSafeReadOnlyOperation(pathname)
+      ) {
+        return NextResponse.next();
+      }
+      return licenseUnavailableResponse();
+    }
     const j = (await licRes.json().catch(() => ({}))) as any;
 
     // If licensed or actively on trial, allow through
+    if (j?.readOnly && !["GET", "HEAD", "OPTIONS"].includes(req.method)) {
+      if (!isSafeReadOnlyOperation(pathname)) {
+        return NextResponse.json(
+          {
+            ok: false,
+            code: "LICENSE_READ_ONLY",
+            error: "Axein Billing is in read-only mode. Connect to the internet to refresh the license.",
+          },
+          { status: 423 }
+        );
+      }
+    }
     if (j?.isLicensed || j?.trialActive || j?.canStartTrial) {
       return NextResponse.next();
     }
@@ -60,8 +101,13 @@ export async function middleware(req: NextRequest) {
     }
     return NextResponse.next();
   } catch {
-    // Fail open if status endpoint fails (prevents hard lockouts)
-    return NextResponse.next();
+    if (
+      ["GET", "HEAD", "OPTIONS"].includes(req.method) ||
+      isSafeReadOnlyOperation(pathname)
+    ) {
+      return NextResponse.next();
+    }
+    return licenseUnavailableResponse();
   }
 }
 

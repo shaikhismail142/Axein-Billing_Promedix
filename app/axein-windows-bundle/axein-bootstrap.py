@@ -30,10 +30,9 @@ import re
 import socket
 import urllib.request
 import urllib.error
-import calendar
-import random
-import string
 import hashlib
+import secrets
+import webbrowser
 from datetime import datetime
 
 # ---------- Defaults ----------
@@ -46,7 +45,7 @@ TZ_DEFAULT           = "Asia/Kolkata"
 REPO_DEFAULT         = "https://github.com/shaikhismail142/Axein-Billing_Promedix.git"
 BRANCH_DEFAULT       = "codex/healthcare-customization"
 # Image install (recommended for Windows)
-APP_VERSION_DEFAULT  = "1.2.0"
+APP_VERSION_DEFAULT  = "1.3.0"
 RELEASE_TAG_DEFAULT  = f"v{APP_VERSION_DEFAULT}"
 WEB_IMAGE_DEFAULT    = f"axein-billing-promedix:{APP_VERSION_DEFAULT}"
 IMAGE_ARCHIVE_URL_DEFAULT = (
@@ -55,6 +54,14 @@ IMAGE_ARCHIVE_URL_DEFAULT = (
 )
 GHCR_OWNER_DEFAULT   = "shaikhismail142"
 GHCR_NAME_DEFAULT    = "axein-billing-promedix"
+LICENSE_PORTAL_DEFAULT = "https://axein.in"
+PORTAL_KEY_ID_DEFAULT = "axein-2026-01"
+PORTAL_PUBLIC_KEY_DEFAULT = "MCowBQYDK2VwAyEALYZmnyyHPYhB1OcPIzn3iRNrGy5hYmTlOOS8+xRlrl8="
+LEGACY_PUBLIC_KEY_DEFAULT = "MCowBQYDK2VwAyEAb5mB0eifFbLbrfvp5JNYwJ5ULHL2Iu61GFcgwue/nzI="
+
+PORTAL_DEVICE_HASH = ""
+PORTAL_ACTIVATION_SECRET = ""
+PORTAL_ORIGIN = LICENSE_PORTAL_DEFAULT
 
 # Used as a simple "is schema present?" gate before/after migrations.
 # Keep this minimal so an older DB doesn't force a full re-init.
@@ -188,8 +195,8 @@ def load_license_pubkey(app_dir: Path, cli_key: str | None) -> str | None:
         except Exception as e:
             warn(f"Could not read {env_candidate}: {e}")
 
-    warn("LICENSE_PUBLIC_KEY not found (flag/info.json/.env.template/.env.example). License verify will fail until set.")
-    return None
+    ok("Using the bundled Axein portal verification key.")
+    return PORTAL_PUBLIC_KEY_DEFAULT
 
 # ---------- Compose generation ----------
 
@@ -217,7 +224,18 @@ def write_compose(dest: Path, root_dir: Path, app_dir: Path, app_port: int, tz: 
 
     platform_line = compose_platform_for(host_os, host_arch)
     service_platform_yaml = f"\n    platform: {platform_line}" if platform_line else ""
-    license_env = f'LICENSE_PUBLIC_KEY: "{license_pubkey}"' if license_pubkey else ""
+    legacy_key = license_pubkey or LEGACY_PUBLIC_KEY_DEFAULT
+    public_keys_json = json.dumps({
+        "ed25519-v1": legacy_key,
+        PORTAL_KEY_ID_DEFAULT: PORTAL_PUBLIC_KEY_DEFAULT,
+    }, separators=(",", ":"))
+    license_env = "\n".join([
+        f'LICENSE_PUBLIC_KEY: "{legacy_key}"',
+        f"LICENSE_PUBKEYS_JSON: '{public_keys_json}'",
+        f'AXEIN_DEVICE_HASH: "{PORTAL_DEVICE_HASH}"',
+        f'AXEIN_DESKTOP_ACTIVATION_SECRET: "{PORTAL_ACTIVATION_SECRET}"',
+        f'AXEIN_LICENSE_PORTAL_URL: "{PORTAL_ORIGIN}"',
+    ])
 
     minio_service = f"""
   minio:
@@ -401,8 +419,18 @@ def write_env_file(dest: Path, app_port: int, tz: str, db_user: str, db_pass: st
             "S3_SECRET=minioadmin",
             "S3_FORCE_PATH_STYLE=true",
         ]
-    if license_pubkey:
-        lines.append(f"LICENSE_PUBLIC_KEY={license_pubkey}")
+    legacy_key = license_pubkey or LEGACY_PUBLIC_KEY_DEFAULT
+    public_keys_json = json.dumps({
+        "ed25519-v1": legacy_key,
+        PORTAL_KEY_ID_DEFAULT: PORTAL_PUBLIC_KEY_DEFAULT,
+    }, separators=(",", ":"))
+    lines += [
+        f"LICENSE_PUBLIC_KEY={legacy_key}",
+        f"LICENSE_PUBKEYS_JSON={public_keys_json}",
+        f"AXEIN_DEVICE_HASH={PORTAL_DEVICE_HASH}",
+        f"AXEIN_DESKTOP_ACTIVATION_SECRET={PORTAL_ACTIVATION_SECRET}",
+        f"AXEIN_LICENSE_PORTAL_URL={PORTAL_ORIGIN}",
+    ]
     dest.write_text("\n".join(lines) + "\n", encoding="utf-8")
     ok(f".env written at {dest}")
 
@@ -509,7 +537,14 @@ def tables_missing(compose_file: Path, db_name: str, db_user: str, expected: lis
     return missing
 
 
-SOFT_FAIL_MIGRATIONS: set[str] = set()
+# stock_ledger is a retired/optional table. Older releases briefly created it
+# with UUID product IDs, while the canonical products table uses INTEGER IDs.
+# The application uses stock_movements, so a legacy stock_ledger conflict must
+# never prevent payment, quotation, notification, or compatibility migrations.
+SOFT_FAIL_MIGRATIONS: set[str] = {
+    "0114_inventory_stock_ledger.sql",
+    "0114a_fix_stock_ledger.sql",
+}
 
 def migration_candidates(app_dir: Path, mode: str) -> list[Path]:
     mig_dir = app_dir / "db" / "migrations"
@@ -1101,15 +1136,26 @@ def wait_for_service(compose_file: Path, service: str, cmd: list[str], timeout_s
 def wait_for_web_ready(app_port: int, compose_file: Path, timeout_sec=240) -> bool:
     info("Waiting for web to respond…")
     deadline = time.time() + timeout_sec
+    attempts = 0
     while time.time() < deadline:
-        for path in ("/api/health", "/"):
-            if http_get_status("127.0.0.1", app_port, path) == 200:
-                ok("Web returned 200.")
+        attempts += 1
+        for path in ("/api/health", "/api/license/status", "/"):
+            status = http_get_status("127.0.0.1", app_port, path)
+            if 200 <= status < 400:
+                ok(f"Web is ready ({path} returned {status}).")
                 return True
         time.sleep(3)
-        print(".", end="", flush=True)
+        if attempts % 5 == 0:
+            info("Web is still starting; checking again…")
     print()
     warn("Web did not return 200 in time.")
+    run(
+        [
+            "docker", "compose", "-f", os.fspath(compose_file),
+            "logs", "--tail", "40", "web",
+        ],
+        check=False,
+    )
     return False
 
 def resolve_app_src(repo_dir: Path) -> Path:
@@ -1144,13 +1190,200 @@ def docker_login_ghcr(username: str, token: str, target: str) -> bool:
 def smoke_tests(app_port: int) -> bool:
     info("Running smoke tests…")
     ok_count = 0
-    if http_get_status("127.0.0.1", app_port, "/") == 200:
-        ok("GET / -> 200")
+    root_status = http_get_status("127.0.0.1", app_port, "/")
+    if 200 <= root_status < 400:
+        ok(f"GET / -> {root_status}")
         ok_count += 1
-    if http_get_status("127.0.0.1", app_port, "/api/health") == 200:
-        ok("GET /api/health -> 200")
+    health_status = http_get_status("127.0.0.1", app_port, "/api/health")
+    if 200 <= health_status < 400:
+        ok(f"GET /api/health -> {health_status}")
+        ok_count += 1
+    license_status = http_get_status("127.0.0.1", app_port, "/api/license/status")
+    if license_status == 200:
+        ok("GET /api/license/status -> 200")
         ok_count += 1
     return ok_count >= 1
+
+# ---------- Portal activation ----------
+
+def privacy_safe_device_hash(host_os: str) -> str:
+    raw = ""
+    if host_os == "Windows":
+        output = run_out(
+            ["reg", "query", r"HKLM\SOFTWARE\Microsoft\Cryptography", "/v", "MachineGuid"],
+            check=False,
+        )
+        match = re.search(r"MachineGuid\s+REG_SZ\s+([^\r\n]+)", output, re.I)
+        raw = match.group(1).strip() if match else ""
+    elif host_os == "Darwin":
+        output = run_out(["/usr/sbin/ioreg", "-rd1", "-c", "IOPlatformExpertDevice"], check=False)
+        match = re.search(r'"IOPlatformUUID"\s*=\s*"([^"]+)"', output, re.I)
+        raw = match.group(1).strip() if match else ""
+    else:
+        for candidate in (Path("/etc/machine-id"), Path("/var/lib/dbus/machine-id")):
+            if candidate.exists():
+                raw = candidate.read_text(encoding="utf-8").strip()
+                if raw:
+                    break
+    if not raw:
+        raise RuntimeError("Could not read a stable system identifier for device activation.")
+    return hashlib.sha256(f"axein-billing:v1|{raw}".encode("utf-8")).hexdigest()
+
+
+def persisted_activation_secret(root_dir: Path) -> str:
+    secret_file = root_dir / "license" / "desktop-secret"
+    ensure_dir(secret_file.parent)
+    if secret_file.exists():
+        value = secret_file.read_text(encoding="utf-8").strip()
+        if value:
+            return value
+    value = secrets.token_hex(32)
+    secret_file.write_text(value + "\n", encoding="utf-8")
+    try:
+        os.chmod(secret_file, 0o600)
+    except OSError:
+        pass
+    return value
+
+
+def request_json(url: str, payload: dict | None = None, headers: dict | None = None, timeout=15) -> dict:
+    body = json.dumps(payload).encode("utf-8") if payload is not None else None
+    request_headers = {"Accept": "application/json", **(headers or {})}
+    if body is not None:
+        request_headers["Content-Type"] = "application/json"
+    request = urllib.request.Request(
+        url,
+        data=body,
+        headers=request_headers,
+        method="POST" if body is not None else "GET",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            return json.loads(response.read().decode("utf-8") or "{}")
+    except urllib.error.HTTPError as exc:
+        raw = exc.read().decode("utf-8", errors="replace")
+        try:
+            detail = json.loads(raw).get("error") or raw
+        except Exception:
+            detail = raw
+        raise RuntimeError(detail or f"HTTP {exc.code}") from exc
+
+
+def local_license_status(app_port: int) -> dict:
+    try:
+        return request_json(f"http://127.0.0.1:{app_port}/api/license/status", timeout=5)
+    except Exception:
+        return {}
+
+
+def import_portal_certificate(app_port: int, certificate: dict, device_hash: str, secret: str) -> bool:
+    try:
+        response = request_json(
+            f"http://127.0.0.1:{app_port}/api/license/portal-certificate",
+            {"certificate": certificate, "deviceHash": device_hash},
+            {"X-Axein-Desktop-Secret": secret},
+            timeout=15,
+        )
+        return response.get("ok") is True
+    except Exception as exc:
+        warn(f"Portal certificate could not be applied: {exc}")
+        return False
+
+
+def browser_open(url: str, host_os: str):
+    try:
+        if host_os == "Windows":
+            os.startfile(url)  # type: ignore[attr-defined]
+        else:
+            webbrowser.open(url)
+    except Exception:
+        webbrowser.open(url)
+
+
+def run_portal_activation(app_port: int, root_dir: Path, host_os: str, host_arch: str) -> bool:
+    status = local_license_status(app_port)
+    if status.get("isLicensed") or status.get("trialActive"):
+        ok("An existing valid license or trial is already active.")
+        return True
+
+    certificate_file = root_dir / "license" / "portal-certificate.json"
+    if certificate_file.exists():
+        try:
+            certificate = json.loads(certificate_file.read_text(encoding="utf-8"))
+            if import_portal_certificate(
+                app_port, certificate, PORTAL_DEVICE_HASH, PORTAL_ACTIVATION_SECRET
+            ):
+                ok("Saved device certificate applied.")
+                return True
+        except Exception as exc:
+            warn(f"Saved activation certificate was rejected: {exc}")
+
+    info("Creating a privacy-safe activation request…")
+    try:
+        activation = request_json(
+            f"{PORTAL_ORIGIN}/api/v1/billing/activation/request/",
+            {
+                "deviceHash": PORTAL_DEVICE_HASH,
+                "deviceName": platform.node() or "Axein Billing computer",
+                "platform": "windows" if host_os == "Windows" else "macos",
+                "architecture": host_arch,
+                "appVersion": APP_VERSION_DEFAULT,
+            },
+            timeout=20,
+        )
+    except Exception as exc:
+        warn(f"Could not contact the Axein license portal: {exc}")
+        warn(f"Open {PORTAL_ORIGIN}/axein-billing/account/licenses after network access is restored.")
+        return False
+
+    challenge = activation.get("challenge")
+    verifier = activation.get("verifier")
+    browser_url = activation.get("browserUrl")
+    if not challenge or not verifier or not browser_url:
+        warn("The portal returned an incomplete activation request.")
+        return False
+
+    print("\n--- Device Activation ---")
+    print("A browser window will open. Sign in, select the purchased product, and confirm this computer.")
+    print("Axein must approve the license period before installation unlocks.")
+    print(f"Activation page: {browser_url}")
+    print("-------------------------\n")
+    browser_open(browser_url, host_os)
+    info("Waiting for browser confirmation and Axein approval (up to 20 minutes)…")
+    deadline = time.time() + 20 * 60
+    last_status = ""
+    while time.time() < deadline:
+        try:
+            result = request_json(
+                f"{PORTAL_ORIGIN}/api/v1/billing/activation/poll/",
+                {"challenge": challenge, "verifier": verifier},
+                timeout=15,
+            )
+            current = str(result.get("status", "pending"))
+            if current != last_status:
+                info(f"Activation status: {current.replace('_', ' ')}")
+                last_status = current
+            if current == "approved" and result.get("certificate"):
+                certificate = result["certificate"]
+                certificate_file.write_text(json.dumps(certificate, indent=2), encoding="utf-8")
+                try:
+                    os.chmod(certificate_file, 0o600)
+                except OSError:
+                    pass
+                if import_portal_certificate(
+                    app_port, certificate, PORTAL_DEVICE_HASH, PORTAL_ACTIVATION_SECRET
+                ):
+                    ok("Axein Billing is licensed for this computer.")
+                    return True
+                return False
+            if current in ("expired", "rejected"):
+                warn(f"Activation request was {current}.")
+                return False
+        except Exception as exc:
+            warn(f"Activation check will retry: {exc}")
+        time.sleep(4)
+    warn("Activation approval timed out. Re-run the installer to create a fresh request.")
+    return False
 
 # ---------- Self-update helpers ----------
 
@@ -1186,203 +1419,11 @@ def maybe_reexec_with_repo_script(app_dir: Path, allow_reexec: bool = True):
     except Exception as e:
         warn(f"Self-update check failed: {e}")
 
-# ---------- License helpers ----------
-
-def rand_group(n=4) -> str:
-    alphabet = string.ascii_uppercase + string.digits
-    return "".join(random.choice(alphabet) for _ in range(n))
-
-def generate_license_key() -> str:
-    return f"AXEIN-{rand_group()}-{rand_group()}-{rand_group()}"
-
-def parse_date_yyyy_mm_dd(s: str) -> datetime.date:
-    return datetime.strptime(s, "%Y-%m-%d").date()
-
-def add_months(d, months: int):
-    y = d.year + (d.month - 1 + months) // 12
-    m = (d.month - 1 + months) % 12 + 1
-    day = min(d.day, calendar.monthrange(y, m)[1])
-    return datetime(y, m, day).date()
-
-def compute_expiry(start_date, months: int):
-    return add_months(start_date, months)
-
-def prompt_license_details():
-    print("\n--- License Setup ---")
-    company = input("Company name (required): ").strip()
-    while not company:
-        company = input("  Please enter company name: ").strip()
-
-    email = input("Company email (required, or type 'skip' to use admin@local): ").strip()
-    while True:
-        if email.lower() == "skip" or email == "":
-            email = "admin@local"
-            break
-        if email and ("@" in email) and ("." in email.split("@")[-1]):
-            break
-        email = input("  Please enter a valid email (or 'skip'): ").strip()
-
-    term_raw = (input("License term in months [6/12] (default: 12): ").strip() or "12")
-    try:
-        term_months = int(term_raw)
-    except Exception:
-        term_months = 12
-    if term_months not in (6, 12):
-        warn("Invalid term. Using 12 months.")
-        term_months = 12
-
-    today_str = datetime.now().strftime("%Y-%m-%d")
-    start_date = parse_date_yyyy_mm_dd(today_str)
-    use_custom = input(f"Start date will be {today_str}. Use a different start date? [y/N]: ").strip().lower()
-    if use_custom in ("y", "yes"):
-        start_str = input("Start date (YYYY-MM-DD): ").strip() or today_str
-        while True:
-            try:
-                start_date = parse_date_yyyy_mm_dd(start_str)
-                break
-            except Exception:
-                start_str = input("  Please use YYYY-MM-DD: ").strip() or today_str
-
-    computed_end = compute_expiry(start_date, term_months)
-    end_date = computed_end
-    print(f"License end date will be: {end_date}")
-
-    phone = input("Phone (optional): ").strip()
-    gstin = input("GSTIN (optional): ").strip()
-    state_code = input("State code (optional): ").strip()
-
-    return {
-        "company": company,
-        "email": email,
-        "term_months": term_months,
-        "start_date": start_date,
-        "end_date": end_date,
-        "phone": phone,
-        "gstin": gstin,
-        "state_code": state_code,
-    }
-
-def sign_license_with_node(app_dir: Path, license_key: str, email: str, expires_iso: str) -> dict | None:
-    node_exe = resolve_node_exe()
-    if not node_exe:
-        warn("Node.js not found; cannot generate license.")
-        return None
-    tools_dir = resolve_license_tools_dir(app_dir)
-    if not tools_dir:
-        warn("License keygen tools not found (tools/license-keygen missing).")
-        return None
-    key_path = tools_dir / "ed25519-private.pem"
-    sign_script = tools_dir / "sign-license.js"
-    if not key_path.exists() or not sign_script.exists():
-        warn(f"License signing files missing. Expected:\n  {key_path}\n  {sign_script}")
-        return None
-
-    cmd = [
-        node_exe,
-        os.fspath(sign_script),
-        "--key", os.fspath(key_path),
-        "--license", license_key,
-        "--email", email,
-        "--expires", expires_iso,
-    ]
-    out = run_out(cmd, check=False).strip()
-    try:
-        payload = json.loads(out)
-        return payload
-    except Exception:
-        warn("License signing failed. Output was not JSON.")
-        return None
-
-def save_license_txt(payload: dict, downloads_dir: Path) -> Path | None:
-    try:
-        downloads_dir.mkdir(parents=True, exist_ok=True)
-        key = str(payload.get("license_key", "license"))
-        out_path = downloads_dir / f"{key}.txt"
-        out_path.write_text(
-            "\n".join([
-                f"license_key={payload.get('license_key','')}",
-                f"email={payload.get('email','')}",
-                f"expires_at={payload.get('expires_at','')}",
-                f"signature={payload.get('signature','')}",
-            ]) + "\n",
-            encoding="utf-8"
-        )
-        return out_path
-    except Exception as e:
-        warn(f"Could not write license file to Downloads: {e}")
-        return None
-
-def apply_license(app_port: int, payload: dict) -> bool:
-    try:
-        body = json.dumps(payload).encode("utf-8")
-        req = urllib.request.Request(
-            f"http://127.0.0.1:{app_port}/api/license/verify-key",
-            data=body,
-            headers={"Content-Type": "application/json"},
-            method="POST",
-        )
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
-            if data.get("ok"):
-                ok("License applied successfully.")
-                return True
-            warn(f"License apply failed: {data}")
-    except Exception as e:
-        warn(f"License apply request failed: {e}")
-    return False
-
-def apply_business_settings(app_port: int, company: str, email: str, phone: str, gstin: str, state_code: str):
-    value_json = { "name": company }
-    if email:
-        value_json["email"] = email
-    if phone:
-        value_json["phone"] = phone
-    if gstin:
-        value_json["gstin"] = gstin
-    if state_code:
-        value_json["state_code"] = state_code
-    payload = {"key": "business", "value_json": value_json}
-    try:
-        body = json.dumps(payload).encode("utf-8")
-        req = urllib.request.Request(
-            f"http://127.0.0.1:{app_port}/api/settings",
-            data=body,
-            headers={"Content-Type": "application/json"},
-            method="PATCH",
-        )
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            if resp.status == 200:
-                ok("Business settings updated from installer.")
-                return True
-    except Exception as e:
-        warn(f"Business settings update failed: {e}")
-    return False
-
-def ensure_license_keys(app_src_dir: Path) -> bool:
-    """
-    Ensure ed25519 private key exists (for signing). If missing, attempt to generate with init-keys.js.
-    Returns True if private key exists after this step.
-    """
-    tools_dir = resolve_license_tools_dir(app_src_dir)
-    if not tools_dir:
-        warn("License keygen tools not found (tools/license-keygen missing).")
-        return False
-    key_path = tools_dir / "ed25519-private.pem"
-    if key_path.exists():
-        return True
-    node_exe = resolve_node_exe()
-    init_script = tools_dir / "init-keys.js"
-    if node_exe and init_script.exists():
-        warn("License private key missing. Generating new keypair locally…")
-        if platform.system() == "Windows":
-            run(["powershell","-NoProfile","-Command", f"cd '{os.fspath(tools_dir)}'; & '{node_exe}' .\\init-keys.js"], check=False)
-        else:
-            run(["bash","-lc", f"cd '{os.fspath(tools_dir)}' && '{node_exe}' ./init-keys.js"], check=False)
-    return key_path.exists()
-
 # ---------- Main ----------
 
 def main():
+    global PORTAL_DEVICE_HASH, PORTAL_ACTIVATION_SECRET, PORTAL_ORIGIN
+
     ap = argparse.ArgumentParser(description="AxEin – Bootstrap (cross-platform)")
     ap.add_argument("--repo", default=REPO_DEFAULT, help=f"Git repo URL (default: {REPO_DEFAULT})")
     ap.add_argument("--branch", default=BRANCH_DEFAULT, help=f"Git branch (default: {BRANCH_DEFAULT})")
@@ -1399,6 +1440,16 @@ def main():
     # Options
     ap.add_argument("--force-clean", action="store_true", help="DESTROYS existing Postgres data for a clean init.")
     ap.add_argument("--license-public-key", default="", help="SPKI base64 for LICENSE_PUBLIC_KEY (optional).")
+    ap.add_argument(
+        "--license-portal",
+        default=LICENSE_PORTAL_DEFAULT,
+        help=f"Central activation portal (default: {LICENSE_PORTAL_DEFAULT}).",
+    )
+    ap.add_argument(
+        "--skip-portal-activation",
+        action="store_true",
+        help="Install without opening the browser-based device activation flow.",
+    )
     ap.add_argument("--no-redis", action="store_true", help="Skip Redis service.")
     ap.add_argument("--no-mailpit", action="store_true", help="Skip Mailpit (SMTP dev inbox) service.")
     ap.add_argument("--no-minio", action="store_true", help="Skip MinIO service & seeding.")
@@ -1452,6 +1503,15 @@ def main():
 
     for p in [repo_dir, logs_dir, data_dir, pgdata_dir, init_dir, backups_dir]:
         ensure_dir(p)
+
+    PORTAL_ORIGIN = args.license_portal.rstrip("/")
+    try:
+        PORTAL_DEVICE_HASH = privacy_safe_device_hash(host_os)
+        PORTAL_ACTIVATION_SECRET = persisted_activation_secret(root_dir)
+        ok("Privacy-safe device identity prepared for portal activation.")
+    except Exception as exc:
+        fail(f"Could not prepare this computer for device activation: {exc}")
+        sys.exit(2)
 
     if args.force_clean and pgdata_dir.exists():
         warn(f"ForceClean: removing {pgdata_dir} (DESTROYS existing Postgres data)")
@@ -1518,52 +1578,11 @@ def main():
 
     app_src_dir = resolve_app_src(repo_dir)
 
-    # Discover LICENSE_PUBLIC_KEY automatically
+    # Discover the public verification key. Private signing keys must never be
+    # generated or stored on a customer computer.
     discovered_key = load_license_pubkey(app_src_dir, args.license_public_key.strip() or None)
-    if discovered_key:
-        ok(f"LICENSE_PUBLIC_KEY detected (starts with): {discovered_key[:16]}…")
-    else:
-        tools_dir = resolve_license_tools_dir(app_src_dir)
-        info_path = (tools_dir / "info.json") if tools_dir else (app_src_dir / "tools" / "license-keygen" / "info.json")
-        warn(f"LICENSE_PUBLIC_KEY not found. Expected at: {info_path}")
-        # Attempt to generate keys if missing
-        if ensure_license_keys(app_src_dir):
-            discovered_key = load_license_pubkey(app_src_dir, args.license_public_key.strip() or None)
-            if discovered_key:
-                ok(f"LICENSE_PUBLIC_KEY generated (starts with): {discovered_key[:16]}…")
-
-    # Ask for license details early and generate payload for copy/paste
-    license_payload = None
-    try:
-        # Ensure signing key exists (generates local keypair if missing)
-        _ = ensure_license_keys(app_src_dir)
-        # Reload public key if it was generated
-        discovered_key = load_license_pubkey(app_src_dir, args.license_public_key.strip() or None)
-        if discovered_key:
-            ok(f"LICENSE_PUBLIC_KEY detected (starts with): {discovered_key[:16]}…")
-
-        gen_now = input("Generate license payload now? [Y/n]: ").strip().lower()
-        if gen_now in ("", "y", "yes"):
-            details = prompt_license_details()
-            license_key = generate_license_key()
-            expires_iso = f"{details['end_date']}T23:59:59.000Z"
-            license_payload = sign_license_with_node(
-                app_dir=app_src_dir,
-                license_key=license_key,
-                email=details["email"],
-                expires_iso=expires_iso,
-            )
-            if license_payload:
-                print("\n--- License Payload (copy/paste) ---")
-                print(json.dumps(license_payload, indent=2))
-                print("------------------------------------\n")
-                home = Path(os.path.expanduser("~"))
-                downloads = home / "Downloads"
-                saved = save_license_txt(license_payload, downloads)
-                if saved:
-                    ok(f"License saved to: {saved}")
-    except Exception as e:
-        warn(f"License generation skipped due to error: {e}")
+    ok(f"LICENSE_PUBLIC_KEY detected (starts with): {discovered_key[:16]}…")
+    info("Licenses are issued by Axein through the browser and bound to this computer.")
 
     # Compose & env (always GENERATED)
     write_compose(dest=compose_file, root_dir=root_dir, app_dir=app_src_dir, app_port=args.app_port, tz=args.tz,
@@ -1662,19 +1681,20 @@ def main():
         seed_activation_if_missing(compose_file, args.db_name, args.db_user)
     seed_settings_defaults(compose_file, args.db_name, args.db_user)
 
-    # Wait for web & smoke tests
-    if not wait_for_web_ready(args.app_port, compose_file, timeout_sec=240):
+    # Wait for web & smoke tests. Activation follows immediately so the user
+    # can finish installation without copying a reusable key.
+    web_ready = wait_for_web_ready(args.app_port, compose_file, timeout_sec=120)
+    if not web_ready:
         warn(f"Web did not return 200 on /. Run 'docker compose -f {compose_file} logs -f web' for details.")
     all_ok = smoke_tests(args.app_port)
 
-    # Apply license (optional) once web is up
-    if license_payload:
-        try:
-            do_apply = input("Apply license to running app now? [Y/n]: ").strip().lower()
-            if do_apply in ("", "y", "yes"):
-                apply_license(args.app_port, license_payload)
-        except Exception as e:
-            warn(f"License apply skipped due to error: {e}")
+    if web_ready and not args.skip_portal_activation:
+        run_portal_activation(args.app_port, root_dir, host_os, host_arch)
+    elif args.skip_portal_activation:
+        info(
+            f"Portal activation skipped. Open {PORTAL_ORIGIN}/axein-billing/account/licenses "
+            "when you are ready to activate this computer."
+        )
 
     # Helper
     ensure_dir(helper_dir)

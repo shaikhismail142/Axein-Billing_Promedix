@@ -6,6 +6,7 @@ import { getActivationStatus } from '@/app/lib/license-activation';
 type ActiveStatus =
   | { mode: 'active' }
   | { mode: 'trial'; trial_expires_at: string }
+  | { mode: 'read_only'; reason?: string }
   | { mode: 'inactive'; reason?: string };
 
 // --- Build-time detection (avoid DB during next build) ---
@@ -42,7 +43,7 @@ export async function guardApiActivated(allowTrial = true): Promise<
   }
 
   const st = (await getActivationStatus()) as ActiveStatus;
-  const ok = st.mode === 'active' || (allowTrial && st.mode === 'trial');
+  const ok = st.mode === 'active' || st.mode === 'read_only' || (allowTrial && st.mode === 'trial');
 
   if (ok) return { ok: true, status: st };
 
@@ -71,7 +72,7 @@ export async function ensureActivated(allowTrial = true): Promise<{ ok: true; st
   }
 
   const st = (await getActivationStatus()) as ActiveStatus;
-  const ok = st.mode === 'active' || (allowTrial && st.mode === 'trial');
+  const ok = st.mode === 'active' || st.mode === 'read_only' || (allowTrial && st.mode === 'trial');
   if (ok) return { ok: true, status: st };
 
   const reason = st.mode === 'inactive' && 'reason' in st ? st.reason : 'Activation required';

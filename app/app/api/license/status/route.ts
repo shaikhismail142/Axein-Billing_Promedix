@@ -19,7 +19,7 @@ export async function GET() {
     const status = await getActivationStatus();       // may auto-start a 7-day trial once
     const rec = await getActivationRecord();          // raw persisted record (if any)
 
-    const isLicensed = status.mode === 'active';
+    const isLicensed = status.mode === 'active' || status.mode === 'read_only';
     const trialActive = status.mode === 'trial';
 
     // pick an expiry to display
@@ -46,6 +46,8 @@ export async function GET() {
       daysLeft,
       expiresAt,
       canStartTrial: trialEnabled && !isLicensed && !trialActive,
+      readOnly: status.readOnly === true,
+      source: status.source ?? null,
 
       // panel extras
       deviceId: stableDeviceId(),

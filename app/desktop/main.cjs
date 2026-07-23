@@ -4,16 +4,24 @@ const fs = require("fs");
 const path = require("path");
 const http = require("http");
 const https = require("https");
+const crypto = require("crypto");
 const { pipeline } = require("stream/promises");
 
 const APP_URL = process.env.AXEIN_APP_URL || "http://127.0.0.1:3000";
-const APP_VERSION = "1.2.0";
+const PORTAL_URL = (process.env.AXEIN_LICENSE_PORTAL_URL || "https://axein.in").replace(/\/+$/, "");
+const APP_VERSION = "1.3.0";
 const RELEASE_TAG = `v${APP_VERSION}`;
 const RELEASE_IMAGE = !process.env.AXEIN_WEB_IMAGE;
 const WEB_IMAGE = process.env.AXEIN_WEB_IMAGE || `axein-billing-promedix:${APP_VERSION}`;
-const LICENSE_PUBLIC_KEY =
+const LEGACY_LICENSE_PUBLIC_KEY =
   "MCowBQYDK2VwAyEAb5mB0eifFbLbrfvp5JNYwJ5ULHL2Iu61GFcgwue/nzI=";
-const SCHEMA_VERSION = "2026-07-20-v1";
+const PORTAL_LICENSE_PUBLIC_KEY =
+  "MCowBQYDK2VwAyEALYZmnyyHPYhB1OcPIzn3iRNrGy5hYmTlOOS8+xRlrl8=";
+const LICENSE_PUBLIC_KEYS = JSON.stringify({
+  "ed25519-v1": LEGACY_LICENSE_PUBLIC_KEY,
+  "axein-2026-01": PORTAL_LICENSE_PUBLIC_KEY,
+});
+const SCHEMA_VERSION = "2026-07-23-v1";
 const RELEASES_URL =
   "https://github.com/shaikhismail142/Axein-Billing_Promedix/releases";
 const RELEASE_DOWNLOAD_URL = `${RELEASES_URL}/download/${RELEASE_TAG}`;
@@ -21,6 +29,19 @@ const RELEASE_DOWNLOAD_URL = `${RELEASES_URL}/download/${RELEASE_TAG}`;
 let mainWindow;
 let composeFile;
 let logFile;
+let deviceHash = "";
+let desktopActivationSecret = "";
+
+function handleActivationDeepLink(url) {
+  if (!url || !url.startsWith("axein-billing://activation/")) return;
+  appendLog(`Activation handoff received: ${url.split("?")[0]}`);
+  setStatus("Device request confirmed", "Waiting for Axein approval");
+  if (mainWindow) {
+    if (mainWindow.isMinimized()) mainWindow.restore();
+    mainWindow.show();
+    mainWindow.focus();
+  }
+}
 
 function appendLog(message) {
   const line = `[${new Date().toISOString()}] ${message}\n`;
@@ -60,6 +81,66 @@ function run(command, args, options = {}) {
       else reject(new Error(stderr.trim() || stdout.trim() || `${command} exited with ${code}`));
     });
   });
+}
+
+function requestJson(url, options = {}) {
+  return new Promise((resolve, reject) => {
+    const target = new URL(url);
+    const body = options.body ? Buffer.from(JSON.stringify(options.body), "utf8") : null;
+    const client = target.protocol === "https:" ? https : http;
+    const request = client.request(target, {
+      method: options.method || (body ? "POST" : "GET"),
+      timeout: options.timeout || 15000,
+      headers: {
+        Accept: "application/json",
+        ...(body ? { "Content-Type": "application/json", "Content-Length": String(body.length) } : {}),
+        ...(options.headers || {}),
+      },
+    }, (response) => {
+      let raw = "";
+      response.setEncoding("utf8");
+      response.on("data", (chunk) => { raw += chunk; });
+      response.on("end", () => {
+        let parsed = {};
+        try { parsed = raw ? JSON.parse(raw) : {}; } catch (_) {}
+        if (response.statusCode >= 200 && response.statusCode < 300) resolve(parsed);
+        else reject(new Error(parsed.error || `Request failed with HTTP ${response.statusCode}.`));
+      });
+    });
+    request.on("timeout", () => request.destroy(new Error("Request timed out.")));
+    request.on("error", reject);
+    if (body) request.write(body);
+    request.end();
+  });
+}
+
+function persistedSecret() {
+  const file = path.join(app.getPath("userData"), "runtime", "desktop-secret");
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  if (fs.existsSync(file)) return fs.readFileSync(file, "utf8").trim();
+  const secret = crypto.randomBytes(32).toString("hex");
+  fs.writeFileSync(file, `${secret}\n`, { mode: 0o600 });
+  return secret;
+}
+
+async function privacySafeDeviceHash() {
+  let raw = "";
+  if (process.platform === "win32") {
+    const result = await run("reg", [
+      "query",
+      "HKLM\\SOFTWARE\\Microsoft\\Cryptography",
+      "/v",
+      "MachineGuid",
+    ]);
+    const match = result.stdout.match(/MachineGuid\s+REG_SZ\s+([^\r\n]+)/i);
+    raw = match?.[1]?.trim() || "";
+  } else if (process.platform === "darwin") {
+    const result = await run("/usr/sbin/ioreg", ["-rd1", "-c", "IOPlatformExpertDevice"]);
+    const match = result.stdout.match(/"IOPlatformUUID"\s*=\s*"([^"]+)"/i);
+    raw = match?.[1]?.trim() || "";
+  }
+  if (!raw) throw new Error("This computer's device identifier could not be read.");
+  return crypto.createHash("sha256").update(`axein-billing:v1|${raw}`, "utf8").digest("hex");
 }
 
 function dockerCompose(args, options) {
@@ -219,7 +300,17 @@ services:
     command:
       - >-
         set -eu;
-        for f in $$(find /migrations -maxdepth 1 -name '*.sql' | sort); do
+        if psql -h db -U axeindb -d axeindb -Atqc
+        "SELECT to_regclass('public.products') IS NOT NULL
+        AND to_regclass('public.sales') IS NOT NULL" | grep -qx t; then
+          echo "Existing database detected; applying compatibility migrations";
+          files=$$(find /migrations -maxdepth 1 -type f
+          \\( -name '202*.sql' -o -name '999_app_compat.sql' \\) | sort);
+        else
+          echo "Fresh database detected; applying the complete schema";
+          files=$$(find /migrations -maxdepth 1 -type f -name '*.sql' | sort);
+        fi;
+        for f in $$files; do
           echo "Applying $$(basename $$f)";
           psql -h db -U axeindb -d axeindb -v ON_ERROR_STOP=1 -f "$$f";
         done
@@ -255,7 +346,11 @@ services:
       S3_BUCKET: axein
       S3_REGION: ap-south-1
       S3_FORCE_PATH_STYLE: "true"
-      LICENSE_PUBLIC_KEY: "${LICENSE_PUBLIC_KEY}"
+      LICENSE_PUBLIC_KEY: "${LEGACY_LICENSE_PUBLIC_KEY}"
+      LICENSE_PUBKEYS_JSON: '${LICENSE_PUBLIC_KEYS}'
+      AXEIN_DEVICE_HASH: "${deviceHash}"
+      AXEIN_DESKTOP_ACTIVATION_SECRET: "${desktopActivationSecret}"
+      AXEIN_LICENSE_PORTAL_URL: "${PORTAL_URL}"
     ports:
       - "3000:3000"
     restart: unless-stopped
@@ -287,13 +382,79 @@ async function waitForWeb(seconds = 180) {
   return false;
 }
 
-async function ensureRuntime() {
-  if ((await httpReady(`${APP_URL}/api/health`)) || (await httpReady(APP_URL))) {
-    setStatus("AxEin is ready", "Using the running local service");
-    await mainWindow.loadURL(APP_URL);
-    return;
+function certificateFile() {
+  return path.join(app.getPath("userData"), "license", "portal-certificate.json");
+}
+
+async function localLicenseStatus() {
+  try {
+    return await requestJson(`${APP_URL}/api/license/status`, { timeout: 5000 });
+  } catch {
+    return null;
+  }
+}
+
+async function importPortalCertificate(certificate) {
+  await requestJson(`${APP_URL}/api/license/portal-certificate`, {
+    body: { certificate, deviceHash },
+    headers: { "X-Axein-Desktop-Secret": desktopActivationSecret },
+  });
+}
+
+async function ensurePortalActivation() {
+  const status = await localLicenseStatus();
+  if (status?.isLicensed || status?.trialActive) return;
+
+  const saved = certificateFile();
+  if (fs.existsSync(saved)) {
+    try {
+      const certificate = JSON.parse(fs.readFileSync(saved, "utf8"));
+      await importPortalCertificate(certificate);
+      if ((await localLicenseStatus())?.isLicensed) return;
+    } catch (error) {
+      appendLog(`Saved portal certificate rejected: ${error.message}`);
+    }
   }
 
+  setStatus("Connecting to Axein licensing", "Creating a privacy-safe device request");
+  const activation = await requestJson(`${PORTAL_URL}/api/v1/billing/activation/request/`, {
+    body: {
+      deviceHash,
+      deviceName: require("os").hostname(),
+      platform: process.platform === "win32" ? "windows" : "macos",
+      architecture: process.arch,
+      appVersion: APP_VERSION,
+      callbackUri: `axein-billing://activation/${deviceHash.slice(0, 16)}`,
+    },
+  });
+  if (!activation?.challenge || !activation?.verifier || !activation?.browserUrl) {
+    throw new Error("Axein did not return a complete activation challenge.");
+  }
+  await shell.openExternal(activation.browserUrl);
+  setStatus("Approve this computer in your browser", "Sign in, select your purchase, then wait for Axein approval");
+
+  const deadline = Date.now() + 20 * 60 * 1000;
+  while (Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 4000));
+    const result = await requestJson(`${PORTAL_URL}/api/v1/billing/activation/poll/`, {
+      body: { challenge: activation.challenge, verifier: activation.verifier },
+      timeout: 10000,
+    });
+    if (result?.status === "approved" && result.certificate) {
+      fs.mkdirSync(path.dirname(saved), { recursive: true });
+      fs.writeFileSync(saved, JSON.stringify(result.certificate, null, 2), { mode: 0o600 });
+      await importPortalCertificate(result.certificate);
+      setStatus("License approved", "This computer is ready");
+      return;
+    }
+    if (["expired", "rejected"].includes(result?.status)) {
+      throw new Error(`Activation request was ${result.status}.`);
+    }
+  }
+  throw new Error("Activation approval timed out. Reopen Axein Billing to create a new request.");
+}
+
+async function ensureRuntime() {
   setStatus("Checking Docker Desktop", "This keeps billing data on this computer");
   try {
     await run("docker", ["info"]);
@@ -326,6 +487,7 @@ async function ensureRuntime() {
   if (!(await waitForWeb())) {
     throw new Error("AxEin did not become ready in time. Open Diagnostics from the Help menu.");
   }
+  await ensurePortalActivation();
   await mainWindow.loadURL(APP_URL);
 }
 
@@ -366,6 +528,7 @@ function installMenu() {
       label: "Help",
       submenu: [
         { label: "Open Diagnostics Log", click: () => shell.openPath(logFile) },
+        { label: "Open License Portal", click: () => shell.openExternal(`${PORTAL_URL}/axein-billing/account/licenses`) },
         { label: "Check for Updates", click: () => shell.openExternal(RELEASES_URL) },
         { label: "Docker Desktop", click: () => shell.openExternal("https://www.docker.com/products/docker-desktop/") },
       ],
@@ -413,17 +576,28 @@ function createWindow() {
 
 if (!app.requestSingleInstanceLock()) app.quit();
 else {
-  app.on("second-instance", () => {
+  app.on("second-instance", (_event, commandLine) => {
+    handleActivationDeepLink(
+      commandLine.find((value) => value.startsWith("axein-billing://"))
+    );
     if (mainWindow) {
       if (mainWindow.isMinimized()) mainWindow.restore();
       mainWindow.focus();
     }
   });
 
+  app.on("open-url", (event, url) => {
+    event.preventDefault();
+    handleActivationDeepLink(url);
+  });
+
   app.whenReady().then(async () => {
+    app.setAsDefaultProtocolClient("axein-billing");
     const userData = app.getPath("userData");
     composeFile = path.join(userData, "runtime", "docker-compose.yml");
     logFile = path.join(userData, "logs", "desktop.log");
+    desktopActivationSecret = persistedSecret();
+    deviceHash = await privacySafeDeviceHash();
     if (process.platform === "win32" || process.platform === "darwin") {
       app.setLoginItemSettings({ openAtLogin: true });
     }
