@@ -1,4 +1,4 @@
-name: Deploy Axein website
+name: Deploy Axein control room
 
 on:
   workflow_dispatch:
@@ -48,6 +48,10 @@ jobs:
 
       - name: Build and validate website
         working-directory: site-source/platform/axein-modern
+        env:
+          AXEIN_BASE_PATH: /control-room
+          AXEIN_PUBLIC_ORIGIN: https://axein.in
+          AXEIN_PUBLIC_NOINDEX: "1"
         run: |
           set -euo pipefail
           npm ci
@@ -121,6 +125,9 @@ jobs:
           exec_start="$(systemctl show "${service}" --property=ExecStart --value)"
           service_user="$(systemctl show "${service}" --property=User --value)"
           restart_policy="$(systemctl show "${service}" --property=Restart --value)"
+          service_environment="$(systemctl show "${service}" --property=Environment --value)"
+          service_port="$(printf '%s' "${service_environment}" | tr ' ' '\n' | sed -n 's/^PORT=//p' | head -n 1)"
+          service_port="${service_port:-3100}"
           test -n "${current}"
           echo "Deploying ${service}; user=${service_user:-system}; workdir=${current}; restart=${restart_policy}; sudo=${can_sudo}"
           echo "Service command: ${exec_start}"
@@ -256,9 +263,8 @@ jobs:
           for attempt in $(seq 1 20); do
             if systemctl is-active --quiet "${service}" \
               && curl -fsS --max-time 15 \
-                -H 'Cache-Control: no-cache' \
-                "https://axein.in/axein-billing/handbook?release=${REVISION:0:12}" \
-                | grep -q 'Axein Billing Pro Handbook'; then
+                "http://127.0.0.1:${service_port}/control-room/api/v1/health" \
+                | grep -q '"ok":true'; then
               ready=1
               break
             fi
