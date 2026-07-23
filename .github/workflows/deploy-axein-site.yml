@@ -125,11 +125,12 @@ jobs:
           exec_start="$(systemctl show "${service}" --property=ExecStart --value)"
           service_user="$(systemctl show "${service}" --property=User --value)"
           restart_policy="$(systemctl show "${service}" --property=Restart --value)"
+          restart_delay="$(systemctl show "${service}" --property=RestartUSec --value)"
           service_environment="$(systemctl show "${service}" --property=Environment --value)"
           service_port="$(printf '%s' "${service_environment}" | tr ' ' '\n' | sed -n 's/^PORT=//p' | head -n 1)"
           service_port="${service_port:-3100}"
           test -n "${current}"
-          echo "Deploying ${service}; user=${service_user:-system}; workdir=${current}; restart=${restart_policy}; sudo=${can_sudo}"
+          echo "Deploying ${service}; user=${service_user:-system}; workdir=${current}; restart=${restart_policy}; restart-delay=${restart_delay:-unknown}; sudo=${can_sudo}"
           echo "Service command: ${exec_start}"
 
           release_dir="/srv/axein/site-releases/${release_id}"
@@ -188,7 +189,10 @@ jobs:
               return 1
             fi
             kill -TERM "${old_pid}"
-            for attempt in $(seq 1 20); do
+            # Some hosts deliberately use a 30-60 second RestartSec. Wait long
+            # enough for systemd to replace the process before deciding to roll
+            # back an otherwise healthy release.
+            for attempt in $(seq 1 120); do
               new_pid="$(systemctl show "${service}" --property=MainPID --value)"
               if systemctl is-active --quiet "${service}" \
                 && [ "${new_pid:-0}" -gt 1 ] \
