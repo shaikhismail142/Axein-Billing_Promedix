@@ -163,7 +163,8 @@ jobs:
             scp -i ~/.ssh/axein_release "$file" \
               "axein@${SSH_HOST}:/srv/axein/release-staging/${RELEASE_TAG}/${name}"
             ssh -i ~/.ssh/axein_release "axein@${SSH_HOST}" \
-              "/srv/axein/app/.venv/bin/python /srv/axein/app/manage.py register_billing_release \
+              "BILLING_PRIVATE_DOWNLOAD_ROOT=/srv/axein/private-downloads \
+                /srv/axein/app/.venv/bin/python /srv/axein/app/manage.py register_billing_release \
                 '/srv/axein/release-staging/${RELEASE_TAG}/${name}' \
                 --release-version '${APP_VERSION}' \
                 --platform '${platform}' \
