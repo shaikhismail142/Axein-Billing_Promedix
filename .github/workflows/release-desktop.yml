@@ -135,12 +135,13 @@ jobs:
           sha256sum * > SHA256SUMS.txt
           ls -lah
       - name: Upload installers to the private Axein download service
-        if: ${{ secrets.AXEIN_RELEASE_UPLOAD_URL != '' && secrets.AXEIN_RELEASE_UPLOAD_TOKEN != '' }}
         env:
           UPLOAD_URL: ${{ secrets.AXEIN_RELEASE_UPLOAD_URL }}
           UPLOAD_TOKEN: ${{ secrets.AXEIN_RELEASE_UPLOAD_TOKEN }}
         run: |
           set -euo pipefail
+          test -n "${UPLOAD_URL}" || { echo "AXEIN_RELEASE_UPLOAD_URL is not configured"; exit 1; }
+          test -n "${UPLOAD_TOKEN}" || { echo "AXEIN_RELEASE_UPLOAD_TOKEN is not configured"; exit 1; }
           upload_artifact() {
             local file="$1"
             local platform="$2"
