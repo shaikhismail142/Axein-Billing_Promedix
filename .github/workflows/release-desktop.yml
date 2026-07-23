@@ -134,41 +134,56 @@ jobs:
           cd release
           sha256sum * > SHA256SUMS.txt
           ls -lah
-      - name: Upload installers to the private Axein download service
+      - name: Configure private release server access
         env:
-          UPLOAD_URL: ${{ secrets.AXEIN_RELEASE_UPLOAD_URL }}
-          UPLOAD_TOKEN: ${{ secrets.AXEIN_RELEASE_UPLOAD_TOKEN }}
+          SSH_PRIVATE_KEY: ${{ secrets.AXEIN_RELEASE_SSH_KEY }}
+          SSH_HOST: ${{ secrets.AXEIN_RELEASE_SSH_HOST }}
         run: |
           set -euo pipefail
-          test -n "${UPLOAD_URL}" || { echo "AXEIN_RELEASE_UPLOAD_URL is not configured"; exit 1; }
-          test -n "${UPLOAD_TOKEN}" || { echo "AXEIN_RELEASE_UPLOAD_TOKEN is not configured"; exit 1; }
-          upload_artifact() {
+          test -n "${SSH_PRIVATE_KEY}" || { echo "AXEIN_RELEASE_SSH_KEY is not configured"; exit 1; }
+          test -n "${SSH_HOST}" || { echo "AXEIN_RELEASE_SSH_HOST is not configured"; exit 1; }
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "${SSH_PRIVATE_KEY}" > ~/.ssh/axein_release
+          chmod 600 ~/.ssh/axein_release
+          ssh-keyscan -H "${SSH_HOST}" >> ~/.ssh/known_hosts
+          ssh -i ~/.ssh/axein_release "axein@${SSH_HOST}" \
+            "install -d -m 700 '/srv/axein/release-staging/${RELEASE_TAG}'"
+      - name: Upload installers to private storage
+        env:
+          SSH_HOST: ${{ secrets.AXEIN_RELEASE_SSH_HOST }}
+        run: |
+          set -euo pipefail
+          register_artifact() {
             local file="$1"
             local platform="$2"
             local architecture="$3"
-            echo "Uploading $(basename "$file") for ${platform}/${architecture}"
-            curl --fail-with-body --retry 3 \
-              -H "X-Axein-Release-Token: ${UPLOAD_TOKEN}" \
-              -F "artifact=@${file}" \
-              -F "version=${APP_VERSION}" \
-              -F "platform=${platform}" \
-              -F "architecture=${architecture}" \
-              -F "isActive=1" \
-              -F "requirements=Docker Desktop 4.30 or newer; 8 GB RAM recommended; 10 GB free disk space." \
-              -F "releaseNotes=Portal-managed single-device activation, customer downloads, billing history, and licensing improvements." \
-              "${UPLOAD_URL}"
+            local name
+            name="$(basename "$file")"
+            echo "Publishing ${name} for ${platform}/${architecture}"
+            scp -i ~/.ssh/axein_release "$file" \
+              "axein@${SSH_HOST}:/srv/axein/release-staging/${RELEASE_TAG}/${name}"
+            ssh -i ~/.ssh/axein_release "axein@${SSH_HOST}" \
+              "/srv/axein/app/.venv/bin/python /srv/axein/app/manage.py register_billing_release \
+                '/srv/axein/release-staging/${RELEASE_TAG}/${name}' \
+                --release-version '${APP_VERSION}' \
+                --platform '${platform}' \
+                --architecture '${architecture}' \
+                --requirements 'Docker Desktop 4.30 or newer; 8 GB RAM recommended; 10 GB free disk space.' \
+                --release-notes 'Portal-managed single-device activation, customer downloads, billing history, and licensing improvements.'"
           }
 
           shopt -s nullglob
           for file in release/*.exe; do
-            upload_artifact "$file" windows x64
+            register_artifact "$file" windows x64
           done
           for file in release/*.dmg; do
             case "$(basename "$file")" in
-              *arm64*) upload_artifact "$file" macos arm64 ;;
-              *x64*|*intel*) upload_artifact "$file" macos x64 ;;
+              *arm64*) register_artifact "$file" macos arm64 ;;
+              *x64*|*intel*) register_artifact "$file" macos x64 ;;
             esac
           done
+          ssh -i ~/.ssh/axein_release "axein@${SSH_HOST}" \
+            "rm -rf '/srv/axein/release-staging/${RELEASE_TAG}'"
       - name: Publish GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
